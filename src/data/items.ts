@@ -39,10 +39,10 @@ export const ITEMS: Record<string, ItemDef> = {
   plate_mail: {
     id: 'plate_mail',
     name: 'Plate Mail',
-    description: 'Fighter armor. +5 DEF.',
+    description: 'Fighter armor. +9 DEF.',
     kind: 'armor',
     price: 95,
-    defBonus: 5,
+    defBonus: 9,
     classes: ['fighter'],
   },
 
@@ -60,11 +60,11 @@ export const ITEMS: Record<string, ItemDef> = {
   sanctified_mail: {
     id: 'sanctified_mail',
     name: 'Sanctified Mail',
-    description: 'Paladin armor. +4 DEF, +2 MDF.',
+    description: 'Paladin armor. +8 DEF, +4 MDF.',
     kind: 'armor',
     price: 100,
-    defBonus: 4,
-    mdfBonus: 2,
+    defBonus: 8,
+    mdfBonus: 4,
     classes: ['paladin'],
   },
 
@@ -81,11 +81,11 @@ export const ITEMS: Record<string, ItemDef> = {
   hide_armor: {
     id: 'hide_armor',
     name: 'Hide Armor',
-    description: 'Barbarian armor. +3 DEF, +1 AGI.',
+    description: 'Barbarian armor. +6 DEF, +2 AGI.',
     kind: 'armor',
     price: 75,
-    defBonus: 3,
-    agiBonus: 1,
+    defBonus: 6,
+    agiBonus: 2,
     classes: ['barbarian'],
   },
 
@@ -103,11 +103,11 @@ export const ITEMS: Record<string, ItemDef> = {
   shadow_leather: {
     id: 'shadow_leather',
     name: 'Shadow Leather',
-    description: 'Thief armor. +2 DEF, +3 AGI.',
+    description: 'Thief armor. +5 DEF, +4 AGI.',
     kind: 'armor',
     price: 80,
-    defBonus: 2,
-    agiBonus: 3,
+    defBonus: 5,
+    agiBonus: 4,
     classes: ['thief'],
   },
 
@@ -125,11 +125,11 @@ export const ITEMS: Record<string, ItemDef> = {
   vestments: {
     id: 'vestments',
     name: 'Holy Vestments',
-    description: 'Cleric robes. +3 DEF, +3 MDF.',
+    description: 'Cleric robes. +6 DEF, +6 MDF.',
     kind: 'armor',
     price: 90,
-    defBonus: 3,
-    mdfBonus: 3,
+    defBonus: 6,
+    mdfBonus: 6,
     classes: ['cleric'],
   },
 
@@ -146,11 +146,11 @@ export const ITEMS: Record<string, ItemDef> = {
   wizard_robe: {
     id: 'wizard_robe',
     name: 'Wizard Robe',
-    description: 'Mage robes. +2 DEF, +4 MDF.',
+    description: 'Mage robes. +4 DEF, +8 MDF.',
     kind: 'armor',
     price: 90,
-    defBonus: 2,
-    mdfBonus: 4,
+    defBonus: 4,
+    mdfBonus: 8,
     classes: ['mage'],
   },
 
@@ -168,11 +168,11 @@ export const ITEMS: Record<string, ItemDef> = {
   barkskin_wrap: {
     id: 'barkskin_wrap',
     name: 'Barkskin Wrap',
-    description: 'Druid armor. +3 DEF, +2 MDF.',
+    description: 'Druid armor. +6 DEF, +5 MDF.',
     kind: 'armor',
     price: 85,
-    defBonus: 3,
-    mdfBonus: 2,
+    defBonus: 6,
+    mdfBonus: 5,
     classes: ['druid'],
   },
 };

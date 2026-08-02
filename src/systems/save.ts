@@ -1,6 +1,6 @@
 import type { ClassId, Combatant, GameState, InventoryItem } from '../data/types';
 import { addItem } from './inventory';
-import { createHero } from './party';
+import { createHero, refreshHeroStats } from './party';
 
 const SAVE_KEY = 'seven_traditions_save_v3';
 const LEGACY_KEYS = ['seven_traditions_save_v2', 'seven_traditions_save_v1'];
@@ -9,7 +9,7 @@ export function defaultState(): GameState {
   return {
     party: [],
     reserve: [],
-    gold: 120,
+    gold: 750,
     flags: { tutorialShown: false },
     chests: {},
     location: 'town',
@@ -28,26 +28,29 @@ export function startNewGame(classIds: string[]): GameState {
 
 function migrateHero(raw: Partial<Combatant>): Combatant {
   const classId = (raw.classId as ClassId) ?? 'fighter';
-  const base = createHero(classId, raw.level ?? 1, 0);
+  const level = raw.level ?? 1;
+  const base = createHero(classId, level, 0);
   const inventory: InventoryItem[] = Array.isArray(raw.inventory)
     ? raw.inventory.map((i) => ({ ...i }))
     : [];
-
-  return {
+  const hero: Combatant = {
     ...base,
     ...raw,
     classId,
+    level,
     name: raw.name ?? base.name,
-    stats: raw.stats ?? base.stats,
-    currentHp: raw.currentHp ?? base.currentHp,
-    currentMp: raw.currentMp ?? base.currentMp,
+    xp: raw.xp ?? 0,
     skills: raw.skills ?? base.skills,
-    states: raw.states ?? [],
-    equipment: raw.equipment ?? {},
+    states: [],
+    equipment: { ...(raw.equipment ?? {}) },
     inventory: inventory.length ? inventory : base.inventory,
     color: raw.color ?? base.color,
     isPlayer: true,
+    currentHp: raw.currentHp ?? base.currentHp,
+    currentMp: raw.currentMp ?? base.currentMp,
   };
+  refreshHeroStats(hero);
+  return hero;
 }
 
 function migrateState(parsed: Partial<GameState>): GameState {

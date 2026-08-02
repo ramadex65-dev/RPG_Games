@@ -1,5 +1,6 @@
 import { SKILLS } from '../data/skills';
 import type { Combatant, SkillDef } from '../data/types';
+import { isRangedAttack, pickHeroTarget } from './formation';
 import { effectiveStats } from './party';
 
 export interface CombatLogLine {
@@ -33,7 +34,11 @@ function damageFormula(
   const d = effectiveStats(defender);
   const offense = skill.kind === 'magical' ? a.mat : a.atk;
   const defense = skill.kind === 'magical' ? d.mdf : d.def;
-  let raw = Math.max(1, Math.floor(offense * skill.power - defense * 0.45));
+  // Flat mitigation + % soak so armor/robes clearly change incoming damage.
+  // Roughly: +5 DEF ≈ −5 dmg and a few extra % less on top of base DEF.
+  const flat = defense * 0.95;
+  const soak = Math.min(0.4, defense / (defense + 40));
+  let raw = Math.max(1, Math.floor(offense * skill.power * (1 - soak) - flat));
   if (skill.undeadBonus && defender.undead) {
     raw = Math.floor(raw * (1 + skill.undeadBonus));
   }
@@ -200,16 +205,25 @@ export function maybeBossPhase(enemy: Combatant): CombatLogLine[] {
   ];
 }
 
-export function enemyAi(enemy: Combatant, heroes: Combatant[]): { skillId?: string; target: Combatant } {
+export function enemyAi(
+  enemy: Combatant,
+  heroes: Combatant[],
+): { skillId?: string; target: Combatant | null } {
   const living = heroes.filter((h) => h.currentHp > 0);
-  const target = living.slice().sort((a, b) => a.currentHp - b.currentHp)[0];
+  if (!living.length) return { target: null };
+
   const usable = enemy.skills.filter((id) => SKILLS[id] && enemy.currentMp >= SKILLS[id].mpCost);
   const preferHeavy =
     enemy.phase2 && usable.filter((id) => id === 'void_storm' || id === 'ley_surge');
   const pool = preferHeavy && preferHeavy.length && Math.random() < 0.65 ? preferHeavy : usable;
+
+  let skillId: string | undefined;
   if (pool.length && Math.random() < (enemy.phase2 ? 0.75 : 0.55)) {
-    const skillId = pool[Math.floor(Math.random() * pool.length)];
-    return { skillId, target };
+    skillId = pool[Math.floor(Math.random() * pool.length)];
   }
-  return { target };
+
+  // Melee (basic attack / physical) leans on the front line; magic picks anyone.
+  const ranged = isRangedAttack(skillId);
+  const target = pickHeroTarget(heroes, ranged);
+  return { skillId, target };
 }

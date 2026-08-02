@@ -42,6 +42,16 @@ export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
   return hero;
 }
 
+/** Rebuild stats from class level + equipped gear (picks up item balance changes). */
+export function refreshHeroStats(hero: Combatant): void {
+  const cls = getClass(hero.classId ?? 'fighter');
+  hero.stats = scaleStats(cls.base, cls.growth, hero.level);
+  if (hero.equipment.weapon) applyEquipBonuses(hero, hero.equipment.weapon, 1);
+  if (hero.equipment.armor) applyEquipBonuses(hero, hero.equipment.armor, 1);
+  hero.currentHp = Math.min(hero.currentHp, hero.stats.hp);
+  hero.currentMp = Math.min(hero.currentMp, hero.stats.mp);
+}
+
 export function xpToNext(level: number): number {
   return Math.floor(40 + level * 25 + level * level * 4);
 }

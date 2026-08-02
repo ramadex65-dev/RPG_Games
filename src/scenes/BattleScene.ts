@@ -14,11 +14,12 @@ import {
 } from '../systems/combat';
 import { Audio } from '../systems/audio';
 import { addItem, listPartyConsumables, pruneEmpty, removeItem } from '../systems/inventory';
-import { grantXp } from '../systems/party';
+import { battleSlotPosition, formationLabel } from '../systems/formation';
+import { grantXp, refreshHeroStats } from '../systems/party';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
 import { CombatLog } from '../ui/CombatLog';
-import { TextMenu } from '../ui/menu';
+import { BATTLE_MENU, TextMenu } from '../ui/menu';
 import { UI } from '../ui/theme';
 
 type Phase = 'command' | 'skill' | 'item' | 'target' | 'animating' | 'won' | 'lost';
@@ -60,13 +61,9 @@ export class BattleScene extends Phaser.Scene {
     Audio.playMusic(this.boss ? 'boss' : 'battle');
 
     const state = Registry.get();
-    this.heroes = state.party.map((h) => ({
-      ...h,
-      states: [...h.states],
-      skills: [...h.skills],
-      inventory: h.inventory.map((i) => ({ ...i })),
-      equipment: { ...h.equipment },
-    }));
+    // Fight with live party references so HP/MP changes persist on flee/return.
+    for (const h of state.party) refreshHeroStats(h);
+    this.heroes = state.party;
     const ids = encounter?.enemies ?? ['slime'];
     this.enemies = ids.map((id, i) => {
       const def = ENEMIES[id];
@@ -110,23 +107,30 @@ export class BattleScene extends Phaser.Scene {
         })
         .setOrigin(0.5)
         .setDepth(3);
-      this.enemyBars.push(this.makeBar(x - 22, y + 52, 44, e.color));
+      this.enemyBars.push(this.makeBar(x - 22, y + 52, 44, e.color, 1));
     });
 
-    this.heroes.forEach((h, i) => {
-      const x = 520 + (i % 2) * 100;
-      const y = 110 + Math.floor(i / 2) * 85;
+    this.heroes.forEach((h) => {
+      const { x, y } = battleSlotPosition(h, this.heroes);
       const key = classTextureKey(h.classId as ClassId);
       this.heroSprites.push(this.add.image(x, y, key).setScale(1.05).setDepth(2));
       this.add
-        .text(x, y + 38, h.name, {
+        .text(x, y + 38, `${h.name}`, {
           fontFamily: UI.font,
           fontSize: UI.tiny,
           color: UI.color.cream,
         })
         .setOrigin(0.5)
         .setDepth(3);
-      this.heroBars.push(this.makeBar(x - 22, y + 48, 44, 0x58c26a));
+      this.add
+        .text(x, y + 50, formationLabel(h), {
+          fontFamily: UI.font,
+          fontSize: '9px',
+          color: formationLabel(h) === 'Front' ? '#c2a35a' : '#8ab4d4',
+        })
+        .setOrigin(0.5)
+        .setDepth(3);
+      this.heroBars.push(this.makeBar(x - 22, y + 60, 44, 0x58c26a, h.currentHp / Math.max(1, h.stats.hp)));
     });
 
     this.statusText = this.add.text(28, 310, '', {
@@ -153,35 +157,51 @@ export class BattleScene extends Phaser.Scene {
       fontSize: '16px',
       color: this.boss ? '#d48cff' : UI.color.cream,
     });
+    this.add.text(28, 34, 'Heavy armor = Front (melee bait)  ·  Light armor = Back  ·  Magic strikes anyone', {
+      fontFamily: UI.font,
+      fontSize: UI.tiny,
+      color: UI.color.muted,
+    });
 
     this.combatLog.clear();
     this.buildTurnOrder();
     this.pushLog({ text: this.boss ? 'The Ley Wraith emerges!' : 'Enemies draw near!' });
+    this.pushLog({
+      text: 'Formation: melee prefers the Front line; spells pick targets at random.',
+      color: '#8ab4d4',
+    });
     this.refreshStatus();
     this.bindKeys();
     this.beginTurn();
   }
 
-  private makeBar(x: number, y: number, w: number, color: number): HpBar {
+  private makeBar(x: number, y: number, w: number, color: number, ratio = 1): HpBar {
     const bg = this.add.rectangle(x, y, w, 5, 0x1a1020).setOrigin(0, 0.5).setDepth(3);
     const fill = this.add.rectangle(x, y, w, 5, color).setOrigin(0, 0.5).setDepth(4);
-    return { bg, fill, maxW: w };
+    const bar = { bg, fill, maxW: w };
+    this.setBar(bar, ratio, false);
+    return bar;
   }
 
   private bindKeys(): void {
-    this.input.keyboard!.on('keydown-UP', () => this.menu?.move(-1));
-    this.input.keyboard!.on('keydown-DOWN', () => this.menu?.move(1));
-    this.input.keyboard!.on('keydown-W', () => this.menu?.move(-1));
-    this.input.keyboard!.on('keydown-S', () => this.menu?.move(1));
-    this.input.keyboard!.on('keydown-ENTER', () => this.onConfirm());
-    this.input.keyboard!.on('keydown-SPACE', () => this.onConfirm());
-    this.input.keyboard!.on('keydown-ESC', () => {
+    const kb = this.input.keyboard!;
+    // Keyboard plugin listeners persist across scene restarts unless removed —
+    // stacked handlers were confirming actions multiple times and freezing turns.
+    kb.removeAllListeners();
+    kb.on('keydown-UP', () => this.menu?.move(-1));
+    kb.on('keydown-DOWN', () => this.menu?.move(1));
+    kb.on('keydown-W', () => this.menu?.move(-1));
+    kb.on('keydown-S', () => this.menu?.move(1));
+    kb.on('keydown-ENTER', () => this.onConfirm());
+    kb.on('keydown-SPACE', () => this.onConfirm());
+    kb.on('keydown-ESC', () => {
       Audio.sfx('cancel');
       this.onCancel();
     });
-    this.input.keyboard!.on('keydown-PAGE_UP', () => this.combatLog.nudgeScroll(-1));
-    this.input.keyboard!.on('keydown-PAGE_DOWN', () => this.combatLog.nudgeScroll(1));
-    this.input.keyboard!.on('keydown-N', () => Audio.toggleMute());
+    kb.on('keydown-PAGE_UP', () => this.combatLog.nudgeScroll(-1));
+    kb.on('keydown-PAGE_DOWN', () => this.combatLog.nudgeScroll(1));
+    kb.on('keydown-N', () => Audio.toggleMute());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => kb.removeAllListeners());
   }
 
   private onConfirm(): void {
@@ -193,6 +213,7 @@ export class BattleScene extends Phaser.Scene {
       this.scene.start('GameOver');
       return;
     }
+    if (this.phase === 'animating') return;
     this.menu?.confirm();
   }
 
@@ -204,13 +225,14 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private spriteFor(c: Combatant): Phaser.GameObjects.Image | undefined {
+  private spriteFor(c: Combatant | null | undefined): Phaser.GameObjects.Image | undefined {
+    if (!c) return undefined;
     if (c.isPlayer) {
       const i = this.heroes.indexOf(c);
-      return this.heroSprites[i];
+      return i >= 0 ? this.heroSprites[i] : undefined;
     }
     const i = this.enemies.indexOf(c);
-    return this.enemySprites[i];
+    return i >= 0 ? this.enemySprites[i] : undefined;
   }
 
   private highlightTurn(actor: Combatant): void {
@@ -244,14 +266,24 @@ export class BattleScene extends Phaser.Scene {
     kind: 'hit' | 'heal',
     then: () => void,
   ): void {
+    const safeThen = (): void => {
+      try {
+        then();
+      } catch {
+        // Never leave combat stuck in animating if resolution throws.
+        this.advance();
+      }
+    };
+
+    const livingTargets = targets.filter((t): t is Combatant => !!t && t.currentHp !== undefined);
     const spr = this.spriteFor(actor);
     if (!spr) {
-      then();
+      safeThen();
       return;
     }
     const originX = spr.x;
     const dir = actor.isPlayer ? -1 : 1;
-    const primary = targets[0] ? this.spriteFor(targets[0]) : undefined;
+    const primary = livingTargets[0] ? this.spriteFor(livingTargets[0]) : undefined;
 
     this.tweens.add({
       targets: spr,
@@ -259,41 +291,49 @@ export class BattleScene extends Phaser.Scene {
       duration: 90,
       yoyo: true,
       onYoyo: () => {
-        if (kind === 'heal') Audio.sfx('heal');
-        else Audio.sfx('hit');
-        for (const t of targets) {
-          const ts = this.spriteFor(t);
-          if (!ts) continue;
-          if (kind === 'heal') {
-            ts.setTint(0x80ffb0);
-            this.time.delayedCall(120, () => ts.clearTint());
-          } else {
+        try {
+          if (kind === 'heal') Audio.sfx('heal');
+          else Audio.sfx('hit');
+          for (const t of livingTargets) {
+            const ts = this.spriteFor(t);
+            if (!ts) continue;
+            if (kind === 'heal') {
+              ts.setTint(0x80ffb0);
+              this.time.delayedCall(120, () => {
+                if (ts.active) ts.clearTint();
+              });
+            } else {
+              this.tweens.add({
+                targets: ts,
+                alpha: 0.3,
+                duration: 50,
+                yoyo: true,
+                repeat: 2,
+                onComplete: () => {
+                  if (ts.active) ts.setAlpha(t.currentHp <= 0 ? 0.2 : 1);
+                },
+              });
+              ts.setTint(0xff6060);
+              this.time.delayedCall(140, () => {
+                if (ts.active && t.currentHp > 0) ts.clearTint();
+              });
+            }
+          }
+          if (primary?.active) {
             this.tweens.add({
-              targets: ts,
-              alpha: 0.3,
-              duration: 50,
+              targets: primary,
+              x: primary.x - dir * 8,
+              duration: 60,
               yoyo: true,
-              repeat: 2,
-              onComplete: () => ts.setAlpha(t.currentHp <= 0 ? 0.2 : 1),
-            });
-            ts.setTint(0xff6060);
-            this.time.delayedCall(140, () => {
-              if (t.currentHp > 0) ts.clearTint();
             });
           }
-        }
-        if (primary) {
-          this.tweens.add({
-            targets: primary,
-            x: primary.x - dir * 8,
-            duration: 60,
-            yoyo: true,
-          });
+        } catch {
+          /* visual only */
         }
       },
       onComplete: () => {
-        spr.x = originX;
-        then();
+        if (spr.active) spr.x = originX;
+        safeThen();
       },
     });
   }
@@ -319,16 +359,25 @@ export class BattleScene extends Phaser.Scene {
     if (this.turnIndex >= this.turnOrder.length) {
       this.buildTurnOrder();
     }
-    const actor = this.currentActor();
+    let actor = this.currentActor();
     if (!actor) {
       this.buildTurnOrder();
-      this.beginTurn();
+      actor = this.currentActor();
+    }
+    if (!actor) {
+      // No valid actor but battle not over — force an end check / skip safely.
+      if (!this.checkEnd()) this.advance();
       return;
     }
 
     this.highlightTurn(actor);
     this.pushLog({ text: `— ${actor.name}'s turn —`, color: '#ffe08a' });
     for (const line of tickStates(actor)) this.pushLog(line);
+
+    if (actor.currentHp <= 0) {
+      this.advance();
+      return;
+    }
 
     if (actor.states.some((s) => s.id === 'bind') && Math.random() < 0.35) {
       this.pushLog({ text: `${actor.name} is entangled and can't move!`, color: '#fa6' });
@@ -344,11 +393,14 @@ export class BattleScene extends Phaser.Scene {
     this.phase = 'command';
     this.menu?.destroy();
     const actor = this.currentActor();
-    if (!actor) return;
+    if (!actor || actor.currentHp <= 0) {
+      this.advance();
+      return;
+    }
     this.menu = new TextMenu(
       this,
-      28,
-      455,
+      20,
+      448,
       [{ label: 'Attack' }, { label: 'Skills' }, { label: 'Items' }, { label: 'Defend' }, { label: 'Flee' }],
       (_i, item) => {
         if (item.label === 'Attack') {
@@ -367,15 +419,14 @@ export class BattleScene extends Phaser.Scene {
             this.showCommandMenu();
           } else if (Math.random() < 0.55) {
             this.pushLog({ text: 'You fled!' });
-            this.syncParty();
-            Audio.playMusic('dungeon');
-            this.scene.start(Registry.get().location === 'ruins' ? 'Ruins' : 'Dungeon');
+            this.finishFlee();
           } else {
             this.pushLog({ text: 'Could not escape!', color: '#fa6' });
             this.advance();
           }
         }
       },
+      BATTLE_MENU,
     );
   }
 
@@ -390,23 +441,30 @@ export class BattleScene extends Phaser.Scene {
       };
     });
     items.push({ label: 'Back', disabled: false });
-    this.menu = new TextMenu(this, 28, 455, items, (index) => {
-      if (index >= actor.skills.length) {
-        this.showCommandMenu();
-        return;
-      }
-      this.pendingSkill = actor.skills[index];
-      const skill = SKILLS[this.pendingSkill];
-      if (skill.target === 'self' || skill.target === 'allies' || skill.target === 'ally') {
-        if (skill.target === 'self') this.resolvePlayerAction([actor]);
-        else if (skill.target === 'allies') this.resolvePlayerAction(this.heroes.filter((h) => h.currentHp > 0));
-        else this.showAllyTargets();
-      } else if (skill.target === 'enemies') {
-        this.resolvePlayerAction(this.enemies.filter((e) => e.currentHp > 0));
-      } else {
-        this.showEnemyTargets();
-      }
-    });
+    this.menu = new TextMenu(
+      this,
+      20,
+      448,
+      items,
+      (index) => {
+        if (index >= actor.skills.length) {
+          this.showCommandMenu();
+          return;
+        }
+        this.pendingSkill = actor.skills[index];
+        const skill = SKILLS[this.pendingSkill];
+        if (skill.target === 'self' || skill.target === 'allies' || skill.target === 'ally') {
+          if (skill.target === 'self') this.resolvePlayerAction([actor]);
+          else if (skill.target === 'allies') this.resolvePlayerAction(this.heroes.filter((h) => h.currentHp > 0));
+          else this.showAllyTargets();
+        } else if (skill.target === 'enemies') {
+          this.resolvePlayerAction(this.enemies.filter((e) => e.currentHp > 0));
+        } else {
+          this.showEnemyTargets();
+        }
+      },
+      BATTLE_MENU,
+    );
   }
 
   private showItemMenu(): void {
@@ -415,15 +473,22 @@ export class BattleScene extends Phaser.Scene {
     const inv = listPartyConsumables(this.heroes);
     const items = inv.map((i) => ({ label: i.label }));
     items.push({ label: 'Back' });
-    this.menu = new TextMenu(this, 28, 455, items, (index) => {
-      if (index >= inv.length) {
-        this.showCommandMenu();
-        return;
-      }
-      this.pendingItem = inv[index].itemId;
-      this.pendingItemOwner = inv[index].ownerIndex;
-      this.showAllyTargets();
-    });
+    this.menu = new TextMenu(
+      this,
+      20,
+      448,
+      items,
+      (index) => {
+        if (index >= inv.length) {
+          this.showCommandMenu();
+          return;
+        }
+        this.pendingItem = inv[index].itemId;
+        this.pendingItemOwner = inv[index].ownerIndex;
+        this.showAllyTargets();
+      },
+      { ...BATTLE_MENU, rowWidth: 300 },
+    );
   }
 
   private showEnemyTargets(): void {
@@ -432,8 +497,8 @@ export class BattleScene extends Phaser.Scene {
     const living = this.enemies.filter((e) => e.currentHp > 0);
     this.menu = new TextMenu(
       this,
-      28,
-      455,
+      20,
+      448,
       [...living.map((e) => ({ label: e.name })), { label: 'Back' }],
       (index) => {
         if (index >= living.length) {
@@ -442,6 +507,7 @@ export class BattleScene extends Phaser.Scene {
         }
         this.resolvePlayerAction([living[index]]);
       },
+      BATTLE_MENU,
     );
   }
 
@@ -451,8 +517,8 @@ export class BattleScene extends Phaser.Scene {
     const living = this.heroes.filter((h) => h.currentHp > 0);
     this.menu = new TextMenu(
       this,
-      28,
-      455,
+      20,
+      448,
       [...living.map((h) => ({ label: h.name })), { label: 'Back' }],
       (index) => {
         if (index >= living.length) {
@@ -461,21 +527,30 @@ export class BattleScene extends Phaser.Scene {
         }
         this.resolvePlayerAction([living[index]]);
       },
+      BATTLE_MENU,
     );
   }
 
   private resolvePlayerAction(targets: Combatant[]): void {
     const actor = this.currentActor();
-    if (!actor) return;
+    if (!actor || this.phase === 'animating') return;
     this.menu?.destroy();
     this.menu = null;
     this.phase = 'animating';
 
+    const livingTargets = targets.filter((t) => t && t.currentHp > 0);
+    if (!livingTargets.length && !this.pendingItem) {
+      this.pushLog({ text: 'No valid target.', color: '#fa6' });
+      this.pendingSkill = null;
+      this.showCommandMenu();
+      return;
+    }
+
     if (this.pendingItem) {
       const item = ITEMS[this.pendingItem];
-      const target = targets[0];
+      const target = livingTargets[0] ?? targets[0];
       const owner = this.heroes[this.pendingItemOwner];
-      if (!owner || !removeItem(owner.inventory, this.pendingItem, 1)) {
+      if (!item || !target || !owner || !removeItem(owner.inventory, this.pendingItem, 1)) {
         this.pushLog({ text: 'No item left in that bag!', color: '#f66' });
         this.pendingItem = null;
         this.showCommandMenu();
@@ -508,14 +583,14 @@ export class BattleScene extends Phaser.Scene {
       skillId !== '__strike__' &&
       SKILLS[skillId]?.kind === 'heal';
 
-    this.animateStrike(actor, targets, isHeal ? 'heal' : 'hit', () => {
+    this.animateStrike(actor, livingTargets, isHeal ? 'heal' : 'hit', () => {
       if (skillId === '__strike__') {
-        for (const line of strike(actor, targets[0])) this.pushLog(line);
+        for (const line of strike(actor, livingTargets[0])) this.pushLog(line);
       } else if (skillId) {
         const result = applySkill(
           actor,
           skillId,
-          targets,
+          livingTargets,
           this.heroes.filter((h) => h.currentHp > 0),
         );
         for (const line of result.logs) this.pushLog(line);
@@ -529,12 +604,25 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private runEnemy(actor: Combatant): void {
+    if (this.checkEnd()) return;
+    if (actor.currentHp <= 0) {
+      this.advance();
+      return;
+    }
     this.phase = 'animating';
     for (const line of maybeBossPhase(actor)) this.pushLog(line);
     const { skillId, target } = enemyAi(actor, this.heroes);
+    if (!target) {
+      this.advance();
+      return;
+    }
     const skill = skillId ? SKILLS[skillId] : null;
     const targets =
       skill?.target === 'enemies' ? this.heroes.filter((h) => h.currentHp > 0) : [target];
+    if (!targets.length) {
+      this.advance();
+      return;
+    }
     const isHeal = skill?.kind === 'heal';
 
     this.animateStrike(actor, targets, isHeal ? 'heal' : 'hit', () => {
@@ -556,7 +644,10 @@ export class BattleScene extends Phaser.Scene {
 
   private advance(): void {
     this.turnIndex += 1;
+    this.menu?.destroy();
+    this.menu = null;
     this.time.delayedCall(280, () => {
+      if (this.phase === 'won' || this.phase === 'lost') return;
       if (!this.checkEnd()) this.beginTurn();
     });
   }
@@ -628,6 +719,18 @@ export class BattleScene extends Phaser.Scene {
     saveGame(Registry.get());
   }
 
+  private finishFlee(): void {
+    // Strip short battle buffs so they don't linger on the map.
+    for (const h of this.heroes) {
+      h.states = h.states.filter((s) => s.id !== 'shield' && s.id !== 'hide');
+    }
+    saveGame(Registry.get());
+    this.combatLog.clear();
+    Audio.playMusic('dungeon');
+    const loc = Registry.get().location;
+    this.scene.start(loc === 'ruins' ? 'Ruins' : 'Dungeon');
+  }
+
   private finishWin(): void {
     this.syncParty();
     saveGame(Registry.get());
@@ -653,9 +756,11 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private syncParty(): void {
+    // Heroes are live Registry.party refs; keep nested fields tidy after rewards.
     const state = Registry.get();
     state.party = this.heroes.map((h) => ({
       ...h,
+      stats: { ...h.stats },
       states: h.states.map((s) => ({ ...s })),
       skills: [...h.skills],
       inventory: h.inventory.map((i) => ({ ...i })),
@@ -667,14 +772,11 @@ export class BattleScene extends Phaser.Scene {
     this.combatLog.push(line);
   }
 
-  private setBar(bar: HpBar, ratio: number): void {
+  private setBar(bar: HpBar, ratio: number, _animate = true): void {
     const w = Math.max(0.001, bar.maxW * Phaser.Math.Clamp(ratio, 0, 1));
-    this.tweens.add({
-      targets: bar.fill,
-      width: w,
-      duration: 180,
-      ease: 'Sine.easeOut',
-    });
+    this.tweens.killTweensOf(bar.fill);
+    // Direct resize — tweening Rectangle width was unreliable and could stall updates.
+    bar.fill.setSize(w, 5);
   }
 
   private refreshStatus(): void {
@@ -682,7 +784,7 @@ export class BattleScene extends Phaser.Scene {
       this.heroes
         .map(
           (h) =>
-            `${h.currentHp <= 0 ? '✝' : '●'} ${h.name} Lv${h.level}  HP ${Math.max(0, h.currentHp)}/${h.stats.hp}  MP ${h.currentMp}/${h.stats.mp}`,
+            `${h.currentHp <= 0 ? '✝' : '●'} ${h.name} [${formationLabel(h)}]  HP ${Math.max(0, h.currentHp)}/${h.stats.hp}  MP ${h.currentMp}/${h.stats.mp}`,
         )
         .join('\n'),
     );
