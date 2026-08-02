@@ -75,8 +75,12 @@ function migrateState(parsed: Partial<GameState>): GameState {
 }
 
 export function saveGame(state: GameState): void {
-  const clean: GameState = { ...state, inventory: undefined };
-  localStorage.setItem(SAVE_KEY, JSON.stringify(clean));
+  try {
+    const clean: GameState = { ...state, inventory: undefined };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(clean));
+  } catch {
+    // Quota / private mode — keep playing even if persist fails.
+  }
 }
 
 export function loadGame(): GameState | null {

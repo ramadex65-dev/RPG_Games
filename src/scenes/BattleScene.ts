@@ -15,6 +15,7 @@ import {
 import { Audio } from '../systems/audio';
 import { addItem, listPartyConsumables, pruneEmpty, removeItem } from '../systems/inventory';
 import { battleSlotPosition, formationLabel } from '../systems/formation';
+import { bindSceneKeys } from '../systems/keys';
 import { grantXp, refreshHeroStats } from '../systems/party';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
@@ -184,24 +185,23 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private bindKeys(): void {
-    const kb = this.input.keyboard!;
-    // Keyboard plugin listeners persist across scene restarts unless removed —
-    // stacked handlers were confirming actions multiple times and freezing turns.
-    kb.removeAllListeners();
-    kb.on('keydown-UP', () => this.menu?.move(-1));
-    kb.on('keydown-DOWN', () => this.menu?.move(1));
-    kb.on('keydown-W', () => this.menu?.move(-1));
-    kb.on('keydown-S', () => this.menu?.move(1));
-    kb.on('keydown-ENTER', () => this.onConfirm());
-    kb.on('keydown-SPACE', () => this.onConfirm());
-    kb.on('keydown-ESC', () => {
-      Audio.sfx('cancel');
-      this.onCancel();
+    bindSceneKeys(this, {
+      'keydown-UP': () => this.menu?.move(-1),
+      'keydown-DOWN': () => this.menu?.move(1),
+      'keydown-W': () => this.menu?.move(-1),
+      'keydown-S': () => this.menu?.move(1),
+      'keydown-ENTER': () => this.onConfirm(),
+      'keydown-SPACE': () => this.onConfirm(),
+      'keydown-ESC': () => {
+        Audio.sfx('cancel');
+        this.onCancel();
+      },
+      'keydown-PAGE_UP': () => this.combatLog.nudgeScroll(-1),
+      'keydown-PAGE_DOWN': () => this.combatLog.nudgeScroll(1),
+      'keydown-N': () => {
+        Audio.toggleMute();
+      },
     });
-    kb.on('keydown-PAGE_UP', () => this.combatLog.nudgeScroll(-1));
-    kb.on('keydown-PAGE_DOWN', () => this.combatLog.nudgeScroll(1));
-    kb.on('keydown-N', () => Audio.toggleMute());
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => kb.removeAllListeners());
   }
 
   private onConfirm(): void {

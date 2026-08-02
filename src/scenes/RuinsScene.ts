@@ -3,6 +3,7 @@ import { classTextureKey } from '../assets/characters';
 import { RUINS_ENCOUNTERS } from '../data/enemies';
 import type { ClassId, GeneratedFloor } from '../data/types';
 import { Audio } from '../systems/audio';
+import { bindSceneKeys } from '../systems/keys';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
 import { chestAt, openChest } from '../world/explore';
@@ -140,15 +141,18 @@ export class RuinsScene extends Phaser.Scene {
       w: kb.addKey('W'),
       s: kb.addKey('S'),
     };
-    this.input.keyboard!.on('keydown-ENTER', () => this.closeToast());
-    this.input.keyboard!.on('keydown-SPACE', () => this.closeToast());
-    this.input.keyboard!.on('keydown-E', () => this.interact());
-    this.input.keyboard!.on('keydown-I', () => this.toggleInventory());
-    this.input.keyboard!.on('keydown-ESC', () => {
-      if (this.inventoryUi) this.inventoryUi.close();
-    });
-    this.input.keyboard!.on('keydown-N', () => {
-      this.toast(Audio.toggleMute() ? 'Audio muted.' : 'Audio on.');
+    bindSceneKeys(this, {
+      'keydown-ENTER': () => this.closeToast(),
+      'keydown-SPACE': () => this.closeToast(),
+      'keydown-E': () => this.interact(),
+      'keydown-I': () => this.toggleInventory(),
+      'keydown-ESC': () => {
+        if (this.inventoryUi) this.inventoryUi.close();
+        else this.closeToast();
+      },
+      'keydown-N': () => {
+        this.toast(Audio.toggleMute() ? 'Audio muted.' : 'Audio on.');
+      },
     });
 
     saveGame(state);
@@ -242,6 +246,7 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   private interact(): void {
+    if (this.blocked || this.inventoryUi) return;
     const state = Registry.get();
     const chest = chestAt(state, 'ruins', this.tx, this.ty);
     if (chest) {
@@ -262,7 +267,7 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   private closeToast(): void {
-    if (!this.blocked) return;
+    if (!this.blocked || this.inventoryUi) return;
     this.dialog.setVisible(false);
     this.blocked = false;
   }

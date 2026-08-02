@@ -7,6 +7,7 @@ import { activeQuestText } from '../data/quests';
 import type { ClassId, Combatant } from '../data/types';
 import { Audio } from '../systems/audio';
 import { addItem, equipItem, equipPreview, pruneEmpty, removeItem, shopBonusBits, shopItemRows } from '../systems/inventory';
+import { bindSceneKeys } from '../systems/keys';
 import { isSellable, sellPrice } from '../systems/loot';
 import { missingClassIds, recruitClass, swapWithReserve } from '../systems/party';
 import { Registry } from '../systems/registry';
@@ -233,31 +234,33 @@ export class TownScene extends Phaser.Scene {
   }
 
   private bindKeys(): void {
-    this.input.keyboard!.on('keydown-E', () => this.interact());
-    this.input.keyboard!.on('keydown-ENTER', () => {
-      if (this.mode === 'dialog') this.advanceDialog();
-      else if (this.mode === 'shop' || this.mode === 'menu') this.menu?.confirm();
+    bindSceneKeys(this, {
+      'keydown-E': () => this.interact(),
+      'keydown-ENTER': () => {
+        if (this.mode === 'dialog') this.advanceDialog();
+        else if (this.mode === 'shop' || this.mode === 'menu') this.menu?.confirm();
+      },
+      'keydown-SPACE': () => {
+        if (this.mode === 'dialog') this.advanceDialog();
+        else if (this.mode === 'shop' || this.mode === 'menu') this.menu?.confirm();
+      },
+      'keydown-ESC': () => {
+        if (this.mode === 'inventory') {
+          this.inventoryUi?.close();
+          return;
+        }
+        Audio.sfx('cancel');
+        this.closeOverlay();
+      },
+      'keydown-I': () => this.toggleInventory(),
+      'keydown-M': () => this.openGameMenu(),
+      'keydown-N': () => {
+        const muted = Audio.toggleMute();
+        this.showDialog(muted ? 'Audio muted.' : 'Audio on.');
+      },
+      'keydown-UP': () => this.menu?.move(-1),
+      'keydown-DOWN': () => this.menu?.move(1),
     });
-    this.input.keyboard!.on('keydown-SPACE', () => {
-      if (this.mode === 'dialog') this.advanceDialog();
-      else if (this.mode === 'shop' || this.mode === 'menu') this.menu?.confirm();
-    });
-    this.input.keyboard!.on('keydown-ESC', () => {
-      if (this.mode === 'inventory') {
-        this.inventoryUi?.close();
-        return;
-      }
-      Audio.sfx('cancel');
-      this.closeOverlay();
-    });
-    this.input.keyboard!.on('keydown-I', () => this.toggleInventory());
-    this.input.keyboard!.on('keydown-M', () => this.openGameMenu());
-    this.input.keyboard!.on('keydown-N', () => {
-      const muted = Audio.toggleMute();
-      this.showDialog(muted ? 'Audio muted.' : 'Audio on.');
-    });
-    this.input.keyboard!.on('keydown-UP', () => this.menu?.move(-1));
-    this.input.keyboard!.on('keydown-DOWN', () => this.menu?.move(1));
   }
 
   private toggleInventory(): void {

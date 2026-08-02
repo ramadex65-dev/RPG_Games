@@ -3,6 +3,7 @@ import { classTextureKey } from '../assets/characters';
 import { CAVE_ENCOUNTERS } from '../data/enemies';
 import type { ClassId, GeneratedFloor } from '../data/types';
 import { Audio } from '../systems/audio';
+import { bindSceneKeys } from '../systems/keys';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
 import { chestAt, openChest } from '../world/explore';
@@ -160,26 +161,19 @@ export class DungeonScene extends Phaser.Scene {
       s: kb.addKey('S'),
     };
 
-    this.input.keyboard!.on('keydown-ENTER', () => {
-      if (this.blocked) {
-        this.dialog.setVisible(false);
-        this.blocked = false;
-      }
-    });
-    this.input.keyboard!.on('keydown-SPACE', () => {
-      if (this.blocked) {
-        this.dialog.setVisible(false);
-        this.blocked = false;
-      }
-    });
-    this.input.keyboard!.on('keydown-E', () => this.interact());
-    this.input.keyboard!.on('keydown-I', () => this.toggleInventory());
-    this.input.keyboard!.on('keydown-ESC', () => {
-      if (this.inventoryUi) this.inventoryUi.close();
-    });
-    this.input.keyboard!.on('keydown-N', () => {
-      const muted = Audio.toggleMute();
-      this.toast(muted ? 'Audio muted.' : 'Audio on.');
+    bindSceneKeys(this, {
+      'keydown-ENTER': () => this.closeToast(),
+      'keydown-SPACE': () => this.closeToast(),
+      'keydown-E': () => this.interact(),
+      'keydown-I': () => this.toggleInventory(),
+      'keydown-ESC': () => {
+        if (this.inventoryUi) this.inventoryUi.close();
+        else this.closeToast();
+      },
+      'keydown-N': () => {
+        const muted = Audio.toggleMute();
+        this.toast(muted ? 'Audio muted.' : 'Audio on.');
+      },
     });
 
     if (!state.flags.tutorialShown) {
@@ -282,6 +276,7 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private interact(): void {
+    if (this.blocked || this.inventoryUi) return;
     const state = Registry.get();
     const chest = chestAt(state, 'dungeon', this.tx, this.ty);
     if (chest) {
@@ -299,6 +294,12 @@ export class DungeonScene extends Phaser.Scene {
   private toast(text: string): void {
     this.blocked = true;
     this.dialog.setText(text + '\n\n[Enter] continue').setVisible(true);
+  }
+
+  private closeToast(): void {
+    if (!this.blocked || this.inventoryUi) return;
+    this.dialog.setVisible(false);
+    this.blocked = false;
   }
 
   private refreshHud(): void {

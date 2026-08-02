@@ -13,7 +13,9 @@ export const TREASURE_IDS = [
 const ALL_GEAR: string[] = Object.values(CLASS_GEAR).flatMap((g) => [g.weapon, g.armor]);
 
 function randInt(min: number, max: number): number {
-  return min + Math.floor(Math.random() * (max - min + 1));
+  const a = Math.min(min, max);
+  const b = Math.max(min, max);
+  return a + Math.floor(Math.random() * (b - a + 1));
 }
 
 function pick<T>(list: readonly T[]): T {
