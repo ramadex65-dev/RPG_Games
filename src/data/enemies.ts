@@ -1,0 +1,68 @@
+import type { EnemyDef } from './types';
+
+export const ENEMIES: Record<string, EnemyDef> = {
+  slime: {
+    id: 'slime',
+    name: 'Slime',
+    color: 0x58c26a,
+    level: 1,
+    stats: { hp: 28, mp: 0, atk: 7, def: 3, mat: 2, mdf: 3, agi: 4, luk: 2 },
+    xp: 12,
+    gold: 6,
+    skills: [],
+  },
+  bat: {
+    id: 'bat',
+    name: 'Cave Bat',
+    color: 0x6a5a7a,
+    level: 2,
+    stats: { hp: 22, mp: 0, atk: 9, def: 2, mat: 2, mdf: 2, agi: 12, luk: 4 },
+    xp: 14,
+    gold: 8,
+    skills: ['bite'],
+  },
+  skeleton: {
+    id: 'skeleton',
+    name: 'Skeleton',
+    color: 0xd9d2c5,
+    level: 3,
+    stats: { hp: 36, mp: 8, atk: 11, def: 6, mat: 6, mdf: 4, agi: 7, luk: 3 },
+    xp: 22,
+    gold: 12,
+    skills: ['dark_bolt'],
+    undead: true,
+  },
+  shade: {
+    id: 'shade',
+    name: 'Shade',
+    color: 0x3a2f4a,
+    level: 4,
+    stats: { hp: 40, mp: 18, atk: 8, def: 4, mat: 12, mdf: 8, agi: 9, luk: 5 },
+    xp: 28,
+    gold: 16,
+    skills: ['dark_bolt'],
+    undead: true,
+  },
+  ley_wraith: {
+    id: 'ley_wraith',
+    name: 'Ley Wraith',
+    color: 0x8b4dff,
+    level: 6,
+    stats: { hp: 140, mp: 40, atk: 14, def: 8, mat: 16, mdf: 12, agi: 10, luk: 8 },
+    xp: 120,
+    gold: 80,
+    skills: ['dark_bolt', 'necrotic_wave'],
+    isBoss: true,
+    undead: true,
+  },
+};
+
+export const ENCOUNTER_TABLE: string[][] = [
+  ['slime'],
+  ['slime', 'slime'],
+  ['bat'],
+  ['bat', 'slime'],
+  ['skeleton'],
+  ['skeleton', 'bat'],
+  ['shade', 'skeleton'],
+];
