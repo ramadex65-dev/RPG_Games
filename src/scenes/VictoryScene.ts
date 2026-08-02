@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Audio } from '../systems/audio';
+import { bindSceneKeys } from '../systems/keys';
 import { Registry } from '../systems/registry';
 import { UI } from '../ui/theme';
 
@@ -55,11 +56,13 @@ export class VictoryScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0);
 
-    this.input.keyboard!.on('keydown-ENTER', () => {
-      state.location = 'town';
-      state.playerX = 11;
-      state.playerY = 8;
-      this.scene.start('Town');
+    bindSceneKeys(this, {
+      'keydown-ENTER': () => {
+        state.location = 'town';
+        state.playerX = 11;
+        state.playerY = 8;
+        this.scene.start('Town');
+      },
     });
   }
 }

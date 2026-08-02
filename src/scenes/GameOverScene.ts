@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Audio } from '../systems/audio';
+import { bindSceneKeys } from '../systems/keys';
 import { loadGame } from '../systems/save';
 import { Registry } from '../systems/registry';
 import { UI } from '../ui/theme';
@@ -29,22 +30,24 @@ export class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.input.keyboard!.on('keydown-ENTER', () => {
-      const save = loadGame();
-      if (save) {
-        for (const h of save.party) {
-          if (h.currentHp <= 0) h.currentHp = Math.max(1, Math.floor(h.stats.hp * 0.3));
+    bindSceneKeys(this, {
+      'keydown-ENTER': () => {
+        const save = loadGame();
+        if (save) {
+          for (const h of save.party) {
+            if (h.currentHp <= 0) h.currentHp = Math.max(1, Math.floor(h.stats.hp * 0.3));
+          }
+          save.location = 'town';
+          save.playerX = 11;
+          save.playerY = 8;
+          Registry.set(save);
+          Audio.playMusic('town');
+          this.scene.start('Town');
+        } else {
+          this.scene.start('Title');
         }
-        save.location = 'town';
-        save.playerX = 11;
-        save.playerY = 8;
-        Registry.set(save);
-        Audio.playMusic('town');
-        this.scene.start('Town');
-      } else {
-        this.scene.start('Title');
-      }
+      },
+      'keydown-ESC': () => this.scene.start('Title'),
     });
-    this.input.keyboard!.on('keydown-ESC', () => this.scene.start('Title'));
   }
 }

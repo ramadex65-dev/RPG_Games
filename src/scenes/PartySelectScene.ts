@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { classTextureKey } from '../assets/characters';
 import { CLASSES } from '../data/classes';
+import { bindSceneKeys } from '../systems/keys';
 import { Registry } from '../systems/registry';
 import { saveGame, startNewGame } from '../systems/save';
 import type { ClassId } from '../data/types';
@@ -67,26 +68,28 @@ export class PartySelectScene extends Phaser.Scene {
 
     this.refresh();
 
-    this.input.keyboard!.on('keydown-UP', () => {
-      this.cursor = (this.cursor + CLASSES.length - 1) % CLASSES.length;
-      this.refresh();
+    bindSceneKeys(this, {
+      'keydown-UP': () => {
+        this.cursor = (this.cursor + CLASSES.length - 1) % CLASSES.length;
+        this.refresh();
+      },
+      'keydown-DOWN': () => {
+        this.cursor = (this.cursor + 1) % CLASSES.length;
+        this.refresh();
+      },
+      'keydown-W': () => {
+        this.cursor = (this.cursor + CLASSES.length - 1) % CLASSES.length;
+        this.refresh();
+      },
+      'keydown-S': () => {
+        this.cursor = (this.cursor + 1) % CLASSES.length;
+        this.refresh();
+      },
+      'keydown-ENTER': () => this.toggle(),
+      'keydown-SPACE': () => this.toggle(),
+      'keydown-C': () => this.confirm(),
+      'keydown-ESC': () => this.scene.start('Title'),
     });
-    this.input.keyboard!.on('keydown-DOWN', () => {
-      this.cursor = (this.cursor + 1) % CLASSES.length;
-      this.refresh();
-    });
-    this.input.keyboard!.on('keydown-W', () => {
-      this.cursor = (this.cursor + CLASSES.length - 1) % CLASSES.length;
-      this.refresh();
-    });
-    this.input.keyboard!.on('keydown-S', () => {
-      this.cursor = (this.cursor + 1) % CLASSES.length;
-      this.refresh();
-    });
-    this.input.keyboard!.on('keydown-ENTER', () => this.toggle());
-    this.input.keyboard!.on('keydown-SPACE', () => this.toggle());
-    this.input.keyboard!.on('keydown-C', () => this.confirm());
-    this.input.keyboard!.on('keydown-ESC', () => this.scene.start('Title'));
   }
 
   private toggle(): void {

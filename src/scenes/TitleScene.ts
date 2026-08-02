@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Audio } from '../systems/audio';
+import { bindSceneKeys } from '../systems/keys';
 import { hasSave, loadGame } from '../systems/save';
 import { Registry } from '../systems/registry';
 import { TextMenu } from '../ui/menu';
@@ -73,18 +74,20 @@ export class TitleScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.input.keyboard!.on('keydown-UP', () => this.menu.move(-1));
-    this.input.keyboard!.on('keydown-DOWN', () => this.menu.move(1));
-    this.input.keyboard!.on('keydown-W', () => this.menu.move(-1));
-    this.input.keyboard!.on('keydown-S', () => this.menu.move(1));
-    this.input.keyboard!.on('keydown-ENTER', () => {
-      Audio.unlock();
-      this.menu.confirm();
+    bindSceneKeys(this, {
+      'keydown-UP': () => this.menu.move(-1),
+      'keydown-DOWN': () => this.menu.move(1),
+      'keydown-W': () => this.menu.move(-1),
+      'keydown-S': () => this.menu.move(1),
+      'keydown-ENTER': () => {
+        Audio.unlock();
+        this.menu.confirm();
+      },
+      'keydown-SPACE': () => {
+        Audio.unlock();
+        this.menu.confirm();
+      },
+      'keydown-N': () => Audio.toggleMute(),
     });
-    this.input.keyboard!.on('keydown-SPACE', () => {
-      Audio.unlock();
-      this.menu.confirm();
-    });
-    this.input.keyboard!.on('keydown-N', () => Audio.toggleMute());
   }
 }

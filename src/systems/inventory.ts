@@ -28,6 +28,14 @@ export function applyEquipBonuses(hero: Combatant, itemId: string, sign: 1 | -1)
   hero.stats.agi += (item.agiBonus ?? 0) * sign;
 }
 
+export function unequipSlot(hero: Combatant, slot: 'weapon' | 'armor'): string | null {
+  const current = hero.equipment[slot];
+  if (!current) return null;
+  applyEquipBonuses(hero, current, -1);
+  delete hero.equipment[slot];
+  return current;
+}
+
 export function equipItem(hero: Combatant, itemId: string): string {
   const item = ITEMS[itemId];
   if (!item || (item.kind !== 'weapon' && item.kind !== 'armor')) {

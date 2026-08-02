@@ -16,19 +16,31 @@ import { Audio } from '../systems/audio';
 import { addItem, listPartyConsumables, pruneEmpty, removeItem } from '../systems/inventory';
 import { battleSlotPosition, formationLabel } from '../systems/formation';
 import { bindSceneKeys } from '../systems/keys';
-import { grantXp, refreshHeroStats } from '../systems/party';
+import { grantXp, refreshHeroStats, xpToNext } from '../systems/party';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
 import { CombatLog } from '../ui/CombatLog';
 import { BATTLE_MENU, TextMenu } from '../ui/menu';
 import { UI } from '../ui/theme';
 
-type Phase = 'command' | 'skill' | 'item' | 'target' | 'animating' | 'won' | 'lost';
+type Phase = 'command' | 'skill' | 'item' | 'target' | 'animating' | 'xp' | 'won' | 'lost';
 
 interface HpBar {
   bg: Phaser.GameObjects.Rectangle;
   fill: Phaser.GameObjects.Rectangle;
   maxW: number;
+}
+
+interface XpRow {
+  name: string;
+  gained: number;
+  xpBefore: number;
+  needBefore: number;
+  xpAfter: number;
+  needAfter: number;
+  levelBefore: number;
+  levelAfter: number;
+  survived: boolean;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -50,12 +62,31 @@ export class BattleScene extends Phaser.Scene {
   private pendingItem: string | null = null;
   private pendingItemOwner = 0;
   private boss = false;
+  private xpOverlay: Phaser.GameObjects.Container | null = null;
+  private battleXp = 0;
 
   constructor() {
     super('Battle');
   }
 
   create(): void {
+    // Scene instances are reused — clear leftover battle UI state.
+    this.menu?.destroy();
+    this.menu = null;
+    this.xpOverlay?.destroy(true);
+    this.xpOverlay = null;
+    this.enemySprites = [];
+    this.heroSprites = [];
+    this.enemyBars = [];
+    this.heroBars = [];
+    this.turnOrder = [];
+    this.turnIndex = 0;
+    this.phase = 'command';
+    this.pendingSkill = null;
+    this.pendingItem = null;
+    this.pendingItemOwner = 0;
+    this.battleXp = 0;
+
     Audio.unlock();
     const encounter = Registry.consumeEncounter();
     this.boss = encounter?.boss ?? false;
@@ -124,10 +155,10 @@ export class BattleScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(3);
       this.add
-        .text(x, y + 50, formationLabel(h), {
+        .text(x, y + 50, formationLabel(h, this.heroes), {
           fontFamily: UI.font,
           fontSize: '9px',
-          color: formationLabel(h) === 'Front' ? '#c2a35a' : '#8ab4d4',
+          color: formationLabel(h, this.heroes) === 'Front' ? '#c2a35a' : '#8ab4d4',
         })
         .setOrigin(0.5)
         .setDepth(3);
@@ -158,7 +189,7 @@ export class BattleScene extends Phaser.Scene {
       fontSize: '16px',
       color: this.boss ? '#d48cff' : UI.color.cream,
     });
-    this.add.text(28, 34, 'Heavy armor = Front (melee bait)  ·  Light armor = Back  ·  Magic strikes anyone', {
+    this.add.text(28, 34, 'Front = 2 highest armor  ·  Rest = Back  ·  Melee prefers Front  ·  Magic hits anyone', {
       fontFamily: UI.font,
       fontSize: UI.tiny,
       color: UI.color.muted,
@@ -168,7 +199,7 @@ export class BattleScene extends Phaser.Scene {
     this.buildTurnOrder();
     this.pushLog({ text: this.boss ? 'The Ley Wraith emerges!' : 'Enemies draw near!' });
     this.pushLog({
-      text: 'Formation: melee prefers the Front line; spells pick targets at random.',
+      text: 'Formation: the two heaviest armors hold the Front; melee prefers them; spells strike at random.',
       color: '#8ab4d4',
     });
     this.refreshStatus();
@@ -205,7 +236,9 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private onConfirm(): void {
-    if (this.phase === 'won') {
+    if (this.phase === 'xp' || this.phase === 'won') {
+      this.xpOverlay?.destroy(true);
+      this.xpOverlay = null;
       this.finishWin();
       return;
     }
@@ -487,7 +520,7 @@ export class BattleScene extends Phaser.Scene {
         this.pendingItemOwner = inv[index].ownerIndex;
         this.showAllyTargets();
       },
-      { ...BATTLE_MENU, rowWidth: 300 },
+      { ...BATTLE_MENU, rowWidth: 300, maxVisible: 5 },
     );
   }
 
@@ -664,12 +697,10 @@ export class BattleScene extends Phaser.Scene {
       return true;
     }
     if (!enemiesAlive) {
-      this.phase = 'won';
       this.menu?.destroy();
       this.turnGlow.setVisible(false);
       Audio.sfx('victory');
       this.resolveRewards();
-      this.pushLog({ text: 'Victory! Press Enter to continue.', color: '#9f9' });
       return true;
     }
     return false;
@@ -686,13 +717,33 @@ export class BattleScene extends Phaser.Scene {
       xp += def.xp;
       gold += def.gold;
     }
+    this.battleXp = xp;
     state.gold += gold;
     this.pushLog({ text: `Gained ${xp} XP and ${gold} gold.`, color: '#ffe08a' });
+
+    const rows: XpRow[] = [];
     for (const h of this.heroes) {
-      if (h.currentHp <= 0) continue;
-      const notes = grantXp(h, xp);
-      for (const n of notes) this.pushLog({ text: n, color: '#9cf' });
+      const levelBefore = h.level;
+      const xpBefore = h.xp;
+      const needBefore = xpToNext(h.level);
+      const survived = h.currentHp > 0;
+      if (survived) {
+        const notes = grantXp(h, xp);
+        for (const n of notes) this.pushLog({ text: n, color: '#9cf' });
+      }
+      rows.push({
+        name: h.name,
+        gained: survived ? xp : 0,
+        xpBefore,
+        needBefore,
+        xpAfter: h.xp,
+        needAfter: xpToNext(h.level),
+        levelBefore,
+        levelAfter: h.level,
+        survived,
+      });
     }
+
     if (this.boss) {
       const bossId = this.enemies[0]?.id.replace(/_\d+$/, '') ?? '';
       if (bossId === 'ley_wraith') {
@@ -717,6 +768,110 @@ export class BattleScene extends Phaser.Scene {
     }
     this.syncParty();
     saveGame(Registry.get());
+    this.showXpSummary(rows, gold);
+  }
+
+  private showXpSummary(rows: XpRow[], gold: number): void {
+    this.phase = 'xp';
+    this.xpOverlay?.destroy(true);
+    const { width, height } = this.scale;
+    const root = this.add.container(0, 0).setDepth(90);
+    root.add(this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.72));
+    root.add(
+      this.add
+        .rectangle(width / 2, height / 2, 520, 420, 0x121820, 0.98)
+        .setStrokeStyle(2, 0xc2a35a),
+    );
+    root.add(
+      this.add
+        .text(width / 2, 110, 'VICTORY', {
+          fontFamily: UI.font,
+          fontSize: '22px',
+          color: UI.color.accent,
+        })
+        .setOrigin(0.5),
+    );
+    root.add(
+      this.add
+        .text(width / 2, 140, `Battle rewards: +${this.battleXp} XP   +${gold}g`, {
+          fontFamily: UI.font,
+          fontSize: UI.small,
+          color: UI.color.cream,
+        })
+        .setOrigin(0.5),
+    );
+
+    const barW = 360;
+    rows.forEach((row, i) => {
+      const y = 175 + i * 58;
+      const title = row.survived
+        ? row.levelAfter > row.levelBefore
+          ? `${row.name}  Lv ${row.levelBefore} → ${row.levelAfter}  LEVEL UP!`
+          : `${row.name}  Lv ${row.levelAfter}   +${row.gained} XP`
+        : `${row.name}  (KO — no XP)`;
+      root.add(
+        this.add.text(120, y, title, {
+          fontFamily: UI.font,
+          fontSize: UI.small,
+          color: row.levelAfter > row.levelBefore ? '#9f9' : UI.color.body,
+        }),
+      );
+
+      const bg = this.add.rectangle(120, y + 24, barW, 12, 0x1a1020).setOrigin(0, 0.5);
+      const fill = this.add.rectangle(120, y + 24, 1, 12, 0x58c26a).setOrigin(0, 0.5);
+      root.add([bg, fill]);
+
+      const startRatio = row.survived ? Phaser.Math.Clamp(row.xpBefore / Math.max(1, row.needBefore), 0, 1) : 0;
+      const endRatio = row.survived ? Phaser.Math.Clamp(row.xpAfter / Math.max(1, row.needAfter), 0, 1) : 0;
+      const midFull = row.levelAfter > row.levelBefore;
+      const anim = { w: Math.max(1, barW * startRatio) };
+      fill.setSize(anim.w, 12);
+
+      const tweenTo = (targetW: number, delay: number, onDone?: () => void) => {
+        this.tweens.add({
+          targets: anim,
+          w: Math.max(1, targetW),
+          duration: 420,
+          delay,
+          ease: 'Sine.easeOut',
+          onUpdate: () => fill.setSize(Math.max(1, anim.w), 12),
+          onComplete: () => onDone?.(),
+        });
+      };
+
+      if (midFull) {
+        tweenTo(barW, 0, () => {
+          anim.w = 1;
+          fill.setSize(1, 12);
+          tweenTo(barW * endRatio, 80);
+        });
+      } else {
+        tweenTo(barW * endRatio, 0);
+      }
+
+      const prog = row.survived
+        ? `${row.xpAfter} / ${row.needAfter} to next level`
+        : 'Defeated';
+      root.add(
+        this.add.text(120, y + 36, prog, {
+          fontFamily: UI.font,
+          fontSize: UI.tiny,
+          color: UI.color.muted,
+        }),
+      );
+    });
+
+    root.add(
+      this.add
+        .text(width / 2, 520, 'Press Enter to continue', {
+          fontFamily: UI.font,
+          fontSize: UI.small,
+          color: UI.color.accent,
+        })
+        .setOrigin(0.5),
+    );
+    this.xpOverlay = root;
+    this.pushLog({ text: 'Victory! Review XP, then press Enter.', color: '#9f9' });
   }
 
   private finishFlee(): void {
@@ -784,7 +939,7 @@ export class BattleScene extends Phaser.Scene {
       this.heroes
         .map(
           (h) =>
-            `${h.currentHp <= 0 ? '✝' : '●'} ${h.name} [${formationLabel(h)}]  HP ${Math.max(0, h.currentHp)}/${h.stats.hp}  MP ${h.currentMp}/${h.stats.mp}`,
+            `${h.currentHp <= 0 ? '✝' : '●'} ${h.name} [${formationLabel(h, this.heroes)}]  HP ${Math.max(0, h.currentHp)}/${h.stats.hp}  MP ${h.currentMp}/${h.stats.mp}`,
         )
         .join('\n'),
     );

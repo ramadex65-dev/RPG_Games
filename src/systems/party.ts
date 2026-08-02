@@ -1,4 +1,5 @@
 import { CLASSES, getClass } from '../data/classes';
+import { CLASS_STARTER_GEAR } from '../data/items';
 import { SKILLS } from '../data/skills';
 import type { ClassId, Combatant, GameState, Stats } from '../data/types';
 import { addItem, applyEquipBonuses } from './inventory';
@@ -17,10 +18,20 @@ function scaleStats(base: Stats, growth: Stats, level: number): Stats {
   };
 }
 
+/** Fill empty weapon/armor slots with class starter gear. */
+export function ensureStarterEquipment(hero: Combatant): void {
+  if (!hero.classId) return;
+  const starter = CLASS_STARTER_GEAR[hero.classId];
+  if (!starter) return;
+  if (!hero.equipment.weapon) hero.equipment.weapon = starter.weapon;
+  if (!hero.equipment.armor) hero.equipment.armor = starter.armor;
+}
+
 export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
   const cls = getClass(classId);
   const stats = scaleStats(cls.base, cls.growth, level);
   const skills = cls.skills.filter((id) => SKILLS[id].learnLevel <= level);
+  const starter = CLASS_STARTER_GEAR[classId];
   const hero: Combatant = {
     id: `hero_${classId}_${slot}_${Math.random().toString(36).slice(2, 7)}`,
     name: cls.name,
@@ -34,9 +45,16 @@ export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
     skills,
     states: [],
     color: cls.color,
-    equipment: {},
+    equipment: {
+      weapon: starter.weapon,
+      armor: starter.armor,
+    },
     inventory: [],
   };
+  applyEquipBonuses(hero, starter.weapon, 1);
+  applyEquipBonuses(hero, starter.armor, 1);
+  hero.currentHp = hero.stats.hp;
+  hero.currentMp = hero.stats.mp;
   addItem(hero.inventory, 'potion', slot === 0 ? 2 : 1);
   if (cls.base.mp >= 16) addItem(hero.inventory, 'ether', 1);
   return hero;
@@ -44,6 +62,7 @@ export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
 
 /** Rebuild stats from class level + equipped gear (picks up item balance changes). */
 export function refreshHeroStats(hero: Combatant): void {
+  ensureStarterEquipment(hero);
   const cls = getClass(hero.classId ?? 'fighter');
   hero.stats = scaleStats(cls.base, cls.growth, hero.level);
   if (hero.equipment.weapon) applyEquipBonuses(hero, hero.equipment.weapon, 1);

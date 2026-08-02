@@ -6,7 +6,16 @@ import { canEquip, ITEMS, shopStockForParty } from '../data/items';
 import { activeQuestText } from '../data/quests';
 import type { ClassId, Combatant } from '../data/types';
 import { Audio } from '../systems/audio';
-import { addItem, equipItem, equipPreview, pruneEmpty, removeItem, shopBonusBits, shopItemRows } from '../systems/inventory';
+import {
+  addItem,
+  equipItem,
+  equipPreview,
+  pruneEmpty,
+  removeItem,
+  shopBonusBits,
+  shopItemRows,
+  unequipSlot,
+} from '../systems/inventory';
 import { bindSceneKeys } from '../systems/keys';
 import { isSellable, sellPrice } from '../systems/loot';
 import { missingClassIds, recruitClass, swapWithReserve } from '../systems/party';
@@ -37,6 +46,8 @@ export class TownScene extends Phaser.Scene {
   private moveCooldown = 0;
   private shopStock: string[] = [];
   private pendingBuyId: string | null = null;
+  /** Brief status shown inside the shop after buy/sell (store stays open). */
+  private shopNotice: string | null = null;
   private dialogQueue: string[] = [];
   private keys!: {
     left: Phaser.Input.Keyboard.Key;
@@ -392,7 +403,34 @@ export class TownScene extends Phaser.Scene {
     Audio.sfx('confirm');
     this.mode = 'shop';
     this.pendingBuyId = null;
+    this.shopNotice = null;
     this.showShopHub();
+  }
+
+  /** Keep shopping — show a status line on the next shop screen. */
+  private shopStay(notice: string, screen: 'hub' | 'buy' | 'sell'): void {
+    this.shopNotice = notice;
+    this.refreshHud();
+    if (screen === 'buy') this.showShopList();
+    else if (screen === 'sell') this.showSellList();
+    else this.showShopHub();
+  }
+
+  private drawShopNotice(y = 102): void {
+    if (!this.shopNotice) return;
+    const notice = this.add
+      .text(400, y, this.shopNotice, {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: '#9dce8a',
+        backgroundColor: '#0a1810aa',
+        padding: { x: 8, y: 3 },
+        wordWrap: { width: 640 },
+        align: 'center',
+      })
+      .setOrigin(0.5);
+    this.overlay.add(notice);
+    this.shopNotice = null;
   }
 
   private showShopHub(): void {
@@ -417,10 +455,11 @@ export class TownScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     this.overlay.add([panel, title, gold]);
+    this.drawShopNotice(230);
     this.menu = new TextMenu(
       this,
       220,
-      240,
+      250,
       [
         { label: 'Buy', detail: 'Gear and supplies for your party' },
         { label: 'Sell', detail: 'Trade loot and spare items for gold' },
@@ -429,7 +468,10 @@ export class TownScene extends Phaser.Scene {
       (_i, item) => {
         if (item.label === 'Buy') {
           const state = Registry.get();
-          this.shopStock = shopStockForParty(state.party.map((p) => p.classId as ClassId));
+          this.shopStock = shopStockForParty(
+            state.party.map((p) => p.classId as ClassId),
+            this.partyLevel(),
+          );
           this.showShopList();
         } else if (item.label === 'Sell') this.showSellList();
         else this.closeOverlay();
@@ -453,6 +495,8 @@ export class TownScene extends Phaser.Scene {
       .rectangle(400, 300, 700, 500, 0x0e141c, 0.98)
       .setStrokeStyle(2, 0xc2a35a);
     const headerBar = this.add.rectangle(400, 70, 700, 48, 0x1a2838, 1);
+    const lvl = this.partyLevel();
+    const tier = lvl >= 5 ? 3 : lvl >= 3 ? 2 : 1;
     const title = this.add
       .text(400, 62, 'GENERAL STORE', {
         fontFamily: UI.font,
@@ -461,11 +505,16 @@ export class TownScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const gold = this.add
-      .text(400, 84, `Your gold: ${Registry.get().gold}g   ·   Click an item or use ↑↓ / Enter`, {
-        fontFamily: UI.font,
-        fontSize: UI.tiny,
-        color: UI.color.accent,
-      })
+      .text(
+        400,
+        84,
+        `Gold: ${Registry.get().gold}g   ·   Party Lv ${lvl}  ·  Gear tier ${tier} (better at Lv3 / Lv5)`,
+        {
+          fontFamily: UI.font,
+          fontSize: UI.tiny,
+          color: UI.color.accent,
+        },
+      )
       .setOrigin(0.5);
 
     const listBg = this.add
@@ -488,17 +537,25 @@ export class TownScene extends Phaser.Scene {
     });
 
     this.overlay.add([panel, headerBar, title, gold, listBg, detailBg, detailTitle, this.shopDetail]);
+    this.drawShopNotice(102);
 
+    const party = Registry.get().party;
     const rows = this.shopStock.map((id) => {
       const r = shopItemRows(id);
-      return { label: r.label, detail: r.detail };
+      const wornBy = party
+        .filter((h) => h.equipment.weapon === id || h.equipment.armor === id)
+        .map((h) => h.name);
+      return {
+        label: wornBy.length ? `${r.label}  ◆ equipped` : r.label,
+        detail: wornBy.length ? `Equipped: ${wornBy.join(', ')}` : r.detail,
+      };
     });
 
     this.menu = new TextMenu(
       this,
       70,
-      110,
-        [...rows, { label: 'Back', detail: 'Return to Buy / Sell' }],
+      130,
+      [...rows, { label: 'Back', detail: 'Return to Buy / Sell' }],
       (index) => {
         if (index >= this.shopStock.length) {
           this.showShopHub();
@@ -510,6 +567,7 @@ export class TownScene extends Phaser.Scene {
         rows: true,
         rowWidth: 320,
         lineHeight: 42,
+        maxVisible: 8,
         container: this.overlay,
         style: {
           fontFamily: UI.font,
@@ -522,10 +580,39 @@ export class TownScene extends Phaser.Scene {
     this.refreshShopDetail(0);
   }
 
-  private collectSellables(): { ownerIndex: number; itemId: string; qty: number; label: string }[] {
+  private collectSellables(): {
+    ownerIndex: number;
+    itemId: string;
+    qty: number;
+    equipped: boolean;
+    slot?: 'weapon' | 'armor';
+    label: string;
+  }[] {
     const party = Registry.get().party;
-    const out: { ownerIndex: number; itemId: string; qty: number; label: string }[] = [];
+    const out: {
+      ownerIndex: number;
+      itemId: string;
+      qty: number;
+      equipped: boolean;
+      slot?: 'weapon' | 'armor';
+      label: string;
+    }[] = [];
     party.forEach((h, ownerIndex) => {
+      for (const slot of ['weapon', 'armor'] as const) {
+        const id = h.equipment[slot];
+        if (!id || !isSellable(id)) continue;
+        const def = ITEMS[id];
+        if (!def) continue;
+        out.push({
+          ownerIndex,
+          itemId: id,
+          qty: 1,
+          equipped: true,
+          slot,
+          label: `◆ ${def.name}  [Equipped · ${h.name}] — ${sellPrice(id)}g`,
+        });
+      }
+
       h.inventory = pruneEmpty(h.inventory);
       for (const stack of h.inventory) {
         if (!isSellable(stack.id) || stack.qty <= 0) continue;
@@ -535,6 +622,7 @@ export class TownScene extends Phaser.Scene {
           ownerIndex,
           itemId: stack.id,
           qty: stack.qty,
+          equipped: false,
           label: `${def.name} x${stack.qty} (${h.name}) — ${sellPrice(stack.id)}g`,
         });
       }
@@ -557,13 +645,19 @@ export class TownScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const hint = this.add
-      .text(400, 118, `Merchant buys at half price. Gold: ${Registry.get().gold}g`, {
-        fontFamily: UI.font,
-        fontSize: UI.tiny,
-        color: UI.color.accent,
-      })
+      .text(
+        400,
+        118,
+        `Merchant buys at half price.  ◆ = equipped.  Gold: ${Registry.get().gold}g`,
+        {
+          fontFamily: UI.font,
+          fontSize: UI.tiny,
+          color: UI.color.accent,
+        },
+      )
       .setOrigin(0.5);
     this.overlay.add([panel, title, hint]);
+    this.drawShopNotice(138);
 
     if (!sellables.length) {
       this.menu = new TextMenu(
@@ -580,33 +674,124 @@ export class TownScene extends Phaser.Scene {
     this.menu = new TextMenu(
       this,
       100,
-      150,
-      [...sellables.map((s) => ({ label: s.label, detail: `Sell one for ${sellPrice(s.itemId)}g` })), { label: 'Back', detail: 'Return to counter' }],
+      160,
+      [
+        ...sellables.map((s) => ({
+          label: s.label,
+          detail: s.equipped
+            ? `EQUIPPED — confirm to unequip & sell for ${sellPrice(s.itemId)}g`
+            : `Sell one for ${sellPrice(s.itemId)}g`,
+        })),
+        { label: 'Back', detail: 'Return to counter' },
+      ],
       (index) => {
         if (index >= sellables.length) {
           this.showShopHub();
           return;
         }
         const entry = sellables[index];
-        const state = Registry.get();
-        const hero = state.party[entry.ownerIndex];
-        if (!hero || !removeItem(hero.inventory, entry.itemId, 1)) {
-          this.showDialog('That item is gone.');
-          this.closeOverlay();
+        if (entry.equipped) {
+          this.confirmSellEquipped(entry);
           return;
         }
-        hero.inventory = pruneEmpty(hero.inventory);
-        const payout = sellPrice(entry.itemId);
-        state.gold += payout;
-        saveGame(state);
-        this.refreshHud();
-        this.showDialog(`Sold ${ITEMS[entry.itemId]?.name ?? 'item'} for ${payout}g.`);
-        this.closeOverlay();
+        this.sellBagItem(entry);
       },
       {
         rows: true,
         rowWidth: 560,
         lineHeight: 40,
+        maxVisible: 8,
+        container: this.overlay,
+        style: { fontFamily: UI.font, fontSize: '13px', color: UI.color.body },
+      },
+    );
+  }
+
+  private sellBagItem(entry: { ownerIndex: number; itemId: string }): void {
+    const state = Registry.get();
+    const hero = state.party[entry.ownerIndex];
+    if (!hero || !removeItem(hero.inventory, entry.itemId, 1)) {
+      this.shopStay('That item is gone.', 'sell');
+      return;
+    }
+    hero.inventory = pruneEmpty(hero.inventory);
+    const payout = sellPrice(entry.itemId);
+    state.gold += payout;
+    saveGame(state);
+    this.shopStay(`Sold ${ITEMS[entry.itemId]?.name ?? 'item'} for ${payout}g.`, 'sell');
+  }
+
+  private confirmSellEquipped(entry: {
+    ownerIndex: number;
+    itemId: string;
+    slot?: 'weapon' | 'armor';
+  }): void {
+    const state = Registry.get();
+    const hero = state.party[entry.ownerIndex];
+    const def = ITEMS[entry.itemId];
+    const slot = entry.slot;
+    if (!hero || !def || !slot || hero.equipment[slot] !== entry.itemId) {
+      this.shopStay('That gear is no longer equipped.', 'sell');
+      return;
+    }
+    const payout = sellPrice(entry.itemId);
+
+    this.overlay.removeAll(true);
+    this.menu?.destroy();
+    const panel = this.add
+      .rectangle(400, 300, 560, 300, 0x0e141c, 0.98)
+      .setStrokeStyle(2, 0xc2a35a);
+    const title = this.add
+      .text(400, 160, 'Sell equipped gear?', {
+        fontFamily: UI.font,
+        fontSize: '18px',
+        color: UI.color.cream,
+      })
+      .setOrigin(0.5);
+    const body = this.add
+      .text(
+        400,
+        200,
+        `${hero.name} is wearing ${def.name}.\nUnequip and sell it for ${payout}g?`,
+        {
+          fontFamily: UI.font,
+          fontSize: UI.small,
+          color: UI.color.muted,
+          align: 'center',
+          wordWrap: { width: 480 },
+        },
+      )
+      .setOrigin(0.5, 0);
+    this.overlay.add([panel, title, body]);
+
+    this.menu = new TextMenu(
+      this,
+      180,
+      270,
+      [
+        { label: `Yes — sell ${def.name}`, detail: `Unequip from ${hero.name}, gain ${payout}g` },
+        { label: 'No — keep it', detail: 'Return to sell list' },
+      ],
+      (index) => {
+        if (index === 1) {
+          this.showSellList();
+          return;
+        }
+        const live = Registry.get();
+        const h = live.party[entry.ownerIndex];
+        if (!h || h.equipment[slot] !== entry.itemId) {
+          this.shopStay('That gear is no longer equipped.', 'sell');
+          return;
+        }
+        unequipSlot(h, slot);
+        live.gold += payout;
+        saveGame(live);
+        this.shopStay(`Sold ${def.name} (unequipped from ${h.name}) for ${payout}g.`, 'sell');
+      },
+      {
+        rows: true,
+        rowWidth: 400,
+        lineHeight: 44,
         container: this.overlay,
         style: { fontFamily: UI.font, fontSize: '13px', color: UI.color.body },
       },
@@ -629,6 +814,9 @@ export class TownScene extends Phaser.Scene {
     const bits = shopBonusBits(id);
     const party = Registry.get().party;
     const fit = party.filter((h) => canEquip(id, h.classId)).map((h) => h.name);
+    const wornBy = party
+      .filter((h) => h.equipment.weapon === id || h.equipment.armor === id)
+      .map((h) => h.name);
     const fitLine =
       item.kind === 'weapon' || item.kind === 'armor'
         ? fit.length
@@ -645,10 +833,11 @@ export class TownScene extends Phaser.Scene {
         `Classes: ${who}`,
         '',
         fitLine,
+        wornBy.length ? `◆ Equipped by: ${wornBy.join(', ')}` : '',
         '',
         'Click / Enter to buy',
       ]
-        .filter((l) => l !== undefined)
+        .filter((l) => l !== undefined && l !== '')
         .join('\n'),
     );
   }
@@ -657,8 +846,7 @@ export class TownScene extends Phaser.Scene {
     const item = ITEMS[itemId];
     const state = Registry.get();
     if (state.gold < item.price) {
-      this.showDialog(`Not enough gold for ${item.name}.`);
-      this.closeOverlay();
+      this.shopStay(`Not enough gold for ${item.name}.`, 'buy');
       return;
     }
 
@@ -666,8 +854,7 @@ export class TownScene extends Phaser.Scene {
     if (item.kind === 'weapon' || item.kind === 'armor') {
       candidates = state.party.filter((h) => canEquip(itemId, h.classId));
       if (!candidates.length) {
-        this.showDialog(`No one in your party can use ${item.name}.`);
-        this.closeOverlay();
+        this.shopStay(`No one in your party can use ${item.name}.`, 'buy');
         return;
       }
     }
@@ -703,11 +890,19 @@ export class TownScene extends Phaser.Scene {
       190,
       [
         ...candidates.map((h) => {
+          const already =
+            (item.kind === 'weapon' && h.equipment.weapon === itemId) ||
+            (item.kind === 'armor' && h.equipment.armor === itemId);
           const cmp =
             item.kind === 'weapon' || item.kind === 'armor'
-              ? equipPreview(h, itemId)
+              ? already
+                ? `◆ Already equipped`
+                : equipPreview(h, itemId)
               : 'Goes in bag';
-          return { label: h.name, detail: cmp };
+          return {
+            label: already ? `${h.name}  ◆ equipped` : h.name,
+            detail: cmp,
+          };
         }),
         { label: 'Back', detail: 'Return to stock list' },
       ],
@@ -732,9 +927,107 @@ export class TownScene extends Phaser.Scene {
     const state = Registry.get();
     const itemId = this.pendingBuyId!;
     const item = ITEMS[itemId];
+    if (!item) return;
     if (state.gold < item.price) {
-      this.showDialog(`Not enough gold for ${item.name}.`);
-      this.closeOverlay();
+      this.shopStay(`Not enough gold for ${item.name}.`, 'buy');
+      return;
+    }
+
+    if (item.kind === 'weapon' || item.kind === 'armor') {
+      const slot = item.kind === 'weapon' ? 'weapon' : 'armor';
+      const equipped = hero.equipment[slot];
+      if (equipped && equipped !== itemId) {
+        this.showEquipReplacePrompt(hero, itemId, equipped);
+        return;
+      }
+    }
+
+    this.completePurchase(hero, itemId, 'auto');
+  }
+
+  /** Ask whether to sell the worn gear when buying a replacement. */
+  private showEquipReplacePrompt(hero: Combatant, newId: string, oldId: string): void {
+    const neu = ITEMS[newId];
+    const old = ITEMS[oldId];
+    if (!neu || !old) {
+      this.completePurchase(hero, newId, 'auto');
+      return;
+    }
+    const payout = sellPrice(oldId);
+
+    this.overlay.removeAll(true);
+    this.menu?.destroy();
+    const panel = this.add
+      .rectangle(400, 300, 620, 360, 0x0e141c, 0.98)
+      .setStrokeStyle(2, 0xc2a35a);
+    const title = this.add
+      .text(400, 130, `${hero.name} already wears ${old.name}`, {
+        fontFamily: UI.font,
+        fontSize: '16px',
+        color: UI.color.cream,
+      })
+      .setOrigin(0.5);
+    const body = this.add
+      .text(
+        400,
+        165,
+        `Buying ${neu.name} (${neu.price}g).\nSell the equipped ${old.name} for ${payout}g when you equip the new piece?`,
+        {
+          fontFamily: UI.font,
+          fontSize: UI.small,
+          color: UI.color.muted,
+          align: 'center',
+          wordWrap: { width: 540 },
+        },
+      )
+      .setOrigin(0.5, 0);
+    this.overlay.add([panel, title, body]);
+
+    this.menu = new TextMenu(
+      this,
+      140,
+      230,
+      [
+        {
+          label: `Equip & sell ${old.name}`,
+          detail: `Wear ${neu.name}, merchant pays ${payout}g for ${old.name}`,
+        },
+        {
+          label: `Equip & keep ${old.name}`,
+          detail: `${old.name} goes into ${hero.name}'s bag`,
+        },
+        {
+          label: `Bag only — keep wearing ${old.name}`,
+          detail: `${neu.name} goes in the bag; equip later with I`,
+        },
+        { label: 'Back', detail: 'Pick a different character' },
+      ],
+      (index) => {
+        if (index === 0) this.completePurchase(hero, newId, 'equip-sell');
+        else if (index === 1) this.completePurchase(hero, newId, 'equip-keep');
+        else if (index === 2) this.completePurchase(hero, newId, 'bag');
+        else this.chooseBuyer(newId);
+      },
+      {
+        rows: true,
+        rowWidth: 520,
+        lineHeight: 44,
+        container: this.overlay,
+        style: { fontFamily: UI.font, fontSize: '13px', color: UI.color.body },
+      },
+    );
+  }
+
+  private completePurchase(
+    hero: Combatant,
+    itemId: string,
+    mode: 'auto' | 'equip-sell' | 'equip-keep' | 'bag',
+  ): void {
+    const state = Registry.get();
+    const item = ITEMS[itemId];
+    if (!item) return;
+    if (state.gold < item.price) {
+      this.shopStay(`Not enough gold for ${item.name}.`, 'buy');
       return;
     }
 
@@ -744,17 +1037,29 @@ export class TownScene extends Phaser.Scene {
     let note = `Bought ${item.name} for ${hero.name}.`;
     if (item.kind === 'weapon' || item.kind === 'armor') {
       const slot = item.kind === 'weapon' ? 'weapon' : 'armor';
-      if (!hero.equipment[slot]) {
+      const oldId = hero.equipment[slot];
+
+      if (mode === 'bag') {
+        note += ' (in bag — press I to equip)';
+      } else if (mode === 'equip-sell' && oldId) {
+        const payout = sellPrice(oldId);
+        const oldName = ITEMS[oldId]?.name ?? 'item';
+        note = equipItem(hero, itemId);
+        if (removeItem(hero.inventory, oldId, 1)) {
+          hero.inventory = pruneEmpty(hero.inventory);
+          state.gold += payout;
+          note += ` Sold ${oldName} for ${payout}g.`;
+        }
+      } else if (mode === 'equip-keep' || (mode === 'auto' && !oldId)) {
         note = equipItem(hero, itemId);
       } else {
         note += ' (in bag — press I to equip)';
       }
     }
 
+    this.pendingBuyId = null;
     saveGame(state);
-    this.refreshHud();
-    this.closeOverlay();
-    this.showDialog(note);
+    this.shopStay(`${note}  ·  ${state.gold}g left`, 'buy');
   }
 
   private openGameMenu(): void {

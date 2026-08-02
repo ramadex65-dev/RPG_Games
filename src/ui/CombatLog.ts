@@ -15,6 +15,13 @@ export class CombatLog {
   private texts: Phaser.GameObjects.Text[] = [];
   private maskGfx: Phaser.GameObjects.Graphics;
   private readonly maxHistory = 80;
+  private readonly scene: Phaser.Scene;
+  private readonly onWheel: (
+    _p: unknown,
+    _g: unknown,
+    _dx: number,
+    dy: number,
+  ) => void;
 
   constructor(
     scene: Phaser.Scene,
@@ -23,6 +30,7 @@ export class CombatLog {
     private width: number,
     private height: number,
   ) {
+    this.scene = scene;
     this.panel = scene.add
       .rectangle(x + width / 2, y + height / 2, width, height, 0x0c1018, 0.92)
       .setStrokeStyle(1, 0x5a6480)
@@ -60,12 +68,14 @@ export class CombatLog {
     const mask = this.maskGfx.createGeometryMask();
     this.texts.forEach((t) => t.setMask(mask));
 
-    scene.input.on('wheel', (_p: unknown, _g: unknown, _dx: number, dy: number) => {
+    this.onWheel = (_p: unknown, _g: unknown, _dx: number, dy: number) => {
       const bounds = new Phaser.Geom.Rectangle(this.x, this.y, this.width, this.height);
       const ptr = scene.input.activePointer;
       if (!bounds.contains(ptr.x, ptr.y)) return;
       this.nudgeScroll(dy > 0 ? 1 : -1);
-    });
+    };
+    scene.input.on('wheel', this.onWheel);
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
   }
 
   clear(): void {
@@ -89,6 +99,8 @@ export class CombatLog {
   }
 
   destroy(): void {
+    if (!this.panel.active) return;
+    this.scene.input.off('wheel', this.onWheel);
     this.panel.destroy();
     this.title.destroy();
     this.hint.destroy();

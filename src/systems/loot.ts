@@ -1,4 +1,10 @@
-import { CLASS_GEAR, ITEMS, SHOP_CONSUMABLES } from '../data/items';
+import {
+  CLASS_GEAR,
+  CLASS_GEAR_TIER2,
+  CLASS_GEAR_TIER3,
+  ITEMS,
+  SHOP_CONSUMABLES,
+} from '../data/items';
 import type { ClassId } from '../data/types';
 
 /** Sellable treasure found in chests (not equippable). */
@@ -10,7 +16,11 @@ export const TREASURE_IDS = [
   'ornate_idol',
 ] as const;
 
-const ALL_GEAR: string[] = Object.values(CLASS_GEAR).flatMap((g) => [g.weapon, g.armor]);
+const ALL_GEAR: string[] = [
+  ...Object.values(CLASS_GEAR),
+  ...Object.values(CLASS_GEAR_TIER2),
+  ...Object.values(CLASS_GEAR_TIER3),
+].flatMap((g) => [g.weapon, g.armor]);
 
 function randInt(min: number, max: number): number {
   const a = Math.min(min, max);

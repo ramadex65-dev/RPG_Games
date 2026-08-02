@@ -39,6 +39,13 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.blocked = false;
+    this.inventoryUi = null;
+    this.moveCooldown = 0;
+    this.stepsSinceFight = 0;
+    this.chestMarks.forEach((m) => m.destroy());
+    this.chestMarks = [];
+
     Audio.unlock();
     Audio.playMusic('dungeon');
     const state = Registry.get();
@@ -117,7 +124,9 @@ export class RuinsScene extends Phaser.Scene {
       })
       .setScrollFactor(0)
       .setDepth(50)
-      .setVisible(false);
+      .setVisible(false)
+      .setInteractive()
+      .on('pointerdown', () => this.closeToast());
 
     this.add
       .text(12, this.scale.height - 22, 'Ruins  •  Blue = Echo Knight  •  Chests (E)  •  I inventory  •  Layout random each entry', {
@@ -151,7 +160,7 @@ export class RuinsScene extends Phaser.Scene {
         else this.closeToast();
       },
       'keydown-N': () => {
-        this.toast(Audio.toggleMute() ? 'Audio muted.' : 'Audio on.');
+        this.flashHint(Audio.toggleMute() ? 'Audio muted.' : 'Audio on.');
       },
     });
 
@@ -164,7 +173,6 @@ export class RuinsScene extends Phaser.Scene {
       this.inventoryUi.close();
       return;
     }
-    if (this.blocked) return;
     Audio.sfx('confirm');
     this.blocked = true;
     this.inventoryUi = new InventoryScreen(this, () => {
@@ -175,7 +183,8 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   update(_t: number, dt: number): void {
-    if (this.blocked) return;
+    if (this.inventoryUi) return;
+    if (this.blocked) this.closeToast();
     this.moveCooldown = Math.max(0, this.moveCooldown - dt);
     if (this.moveCooldown > 0) return;
     let dx = 0;
@@ -200,74 +209,90 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   private tryMove(dx: number, dy: number): void {
-    const map = this.floor.map;
-    const nx = this.tx + dx;
-    const ny = this.ty + dy;
-    if (isBlocked(map, nx, ny)) return;
-    this.tx = nx;
-    this.ty = ny;
-    this.player.setPosition(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2);
-    this.moveCooldown = 120;
-    Audio.sfx('step');
-    const state = Registry.get();
-    state.playerX = this.tx;
-    state.playerY = this.ty;
+    try {
+      const map = this.floor.map;
+      const nx = this.tx + dx;
+      const ny = this.ty + dy;
+      if (isBlocked(map, nx, ny)) return;
+      this.tx = nx;
+      this.ty = ny;
+      this.player.setPosition(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2);
+      this.moveCooldown = 120;
+      Audio.sfx('step');
+      const state = Registry.get();
+      state.playerX = this.tx;
+      state.playerY = this.ty;
 
-    const tile = map[this.ty][this.tx];
-    if (tile === 2) {
-      state.location = 'town';
-      state.playerX = 20;
-      state.playerY = 14;
-      state.ruinsFloor = undefined;
-      saveGame(state);
-      this.scene.start('Town');
-      return;
-    }
-    if (tile === 6) {
-      if (state.ruinsCleared) {
-        this.toast('The Echo Knight is already defeated.');
+      const tile = map[this.ty]?.[this.tx];
+      if (tile === 2) {
+        state.location = 'town';
+        state.playerX = 20;
+        state.playerY = 14;
+        state.ruinsFloor = undefined;
+        saveGame(state);
+        this.scene.start('Town');
         return;
       }
-      Registry.setEncounter(['echo_knight'], true);
-      Audio.playMusic('boss');
-      this.scene.start('Battle');
-      return;
-    }
+      if (tile === 6) {
+        if (state.ruinsCleared) {
+          this.flashHint('The Echo Knight is already defeated.');
+          return;
+        }
+        Registry.setEncounter(['echo_knight'], true);
+        Audio.playMusic('boss');
+        this.scene.start('Battle');
+        return;
+      }
 
-    this.stepsSinceFight += 1;
-    if (this.stepsSinceFight >= 4 && Math.random() < 0.24) {
-      this.stepsSinceFight = 0;
-      const pack = RUINS_ENCOUNTERS[Math.floor(Math.random() * RUINS_ENCOUNTERS.length)];
-      Registry.setEncounter(pack, false);
-      saveGame(state);
-      Audio.playMusic('battle');
-      this.scene.start('Battle');
+      this.stepsSinceFight += 1;
+      if (this.stepsSinceFight >= 4 && Math.random() < 0.24) {
+        this.stepsSinceFight = 0;
+        const pack = RUINS_ENCOUNTERS[Math.floor(Math.random() * RUINS_ENCOUNTERS.length)];
+        Registry.setEncounter(pack, false);
+        saveGame(state);
+        Audio.playMusic('battle');
+        this.scene.start('Battle');
+      }
+    } catch {
+      this.moveCooldown = 120;
+      this.blocked = false;
     }
   }
 
   private interact(): void {
-    if (this.blocked || this.inventoryUi) return;
+    if (this.inventoryUi) return;
     const state = Registry.get();
     const chest = chestAt(state, 'ruins', this.tx, this.ty);
     if (chest) {
-      const msg = openChest(state, chest);
-      Audio.sfx('confirm');
-      saveGame(state);
-      this.refreshChests();
-      this.refreshHud();
-      this.toast(msg);
+      try {
+        const msg = openChest(state, chest);
+        Audio.sfx('confirm');
+        saveGame(state);
+        this.refreshChests();
+        this.refreshHud();
+        this.flashHint(msg, 2600);
+      } catch {
+        this.flashHint('The chest latch sticks… try again.');
+      }
       return;
     }
-    this.toast('Echoes of old battles linger in the stone.');
+    this.flashHint('Echoes of old battles linger in the stone.');
   }
 
-  private toast(text: string): void {
-    this.blocked = true;
-    this.dialog.setText(text + '\n\n[Enter] continue').setVisible(true);
+  private flashHint(text: string, ms = 1600): void {
+    if (this.inventoryUi) return;
+    this.blocked = false;
+    this.dialog.setText(text).setVisible(true);
+    const token = text;
+    this.time.delayedCall(ms, () => {
+      if (!this.inventoryUi && this.dialog.visible && this.dialog.text === token) {
+        this.dialog.setVisible(false);
+      }
+    });
   }
 
   private closeToast(): void {
-    if (!this.blocked || this.inventoryUi) return;
+    if (this.inventoryUi) return;
     this.dialog.setVisible(false);
     this.blocked = false;
   }

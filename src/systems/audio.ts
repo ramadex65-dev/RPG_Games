@@ -52,17 +52,22 @@ class AudioBus {
     dest?: GainNode | null,
   ): void {
     if (this.muted) return;
-    const ctx = this.ensure();
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = type;
-    osc.frequency.value = freq;
-    g.gain.value = vol;
-    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-    osc.connect(g);
-    g.connect(dest ?? this.sfxGain!);
-    osc.start();
-    osc.stop(ctx.currentTime + dur);
+    try {
+      const ctx = this.ensure();
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      // linearRamp avoids InvalidStateError from exponentialRamp when gain is ~0
+      g.gain.setValueAtTime(Math.max(0.0001, vol), ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + Math.max(0.01, dur));
+      osc.connect(g);
+      g.connect(dest ?? this.sfxGain!);
+      osc.start();
+      osc.stop(ctx.currentTime + Math.max(0.01, dur));
+    } catch {
+      /* never let audio kill the game loop */
+    }
   }
 
   sfx(name: 'move' | 'confirm' | 'cancel' | 'hit' | 'heal' | 'menu' | 'victory' | 'defeat' | 'step'): void {

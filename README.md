@@ -29,6 +29,8 @@ Open the URL Vite prints (default `http://localhost:5173`).
 - Front/Back formation from armor weight — melee prefers Front; magic hits randomly
 - Procedural cave/ruins layouts each entry; random chest loot (gold, gear, sellable treasure)
 - Store **Sell** counter for dungeon finds (half price)
+- Heroes start with shop-tier gear; shop unlocks stronger tiers at party Lv3 / Lv5
+- Post-battle XP panel with per-character progress bars
 - Larger scrollable town (Market / Temple / Cave Road / Ruins) with NPCs
 - Quest log with chained objectives
 - Per-character inventory (**I**) with click-to-equip gear view + mouse-friendly class gear shop
