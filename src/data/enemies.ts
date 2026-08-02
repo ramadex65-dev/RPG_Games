@@ -10,6 +10,8 @@ export const ENEMIES: Record<string, EnemyDef> = {
     xp: 12,
     gold: 6,
     skills: [],
+    weak: ['fire', 'nature'],
+    resist: ['physical'],
   },
   bat: {
     id: 'bat',
@@ -20,6 +22,8 @@ export const ENEMIES: Record<string, EnemyDef> = {
     xp: 14,
     gold: 8,
     skills: ['bite'],
+    weak: ['thunder', 'physical'],
+    resist: ['dark'],
   },
   skeleton: {
     id: 'skeleton',
@@ -31,6 +35,8 @@ export const ENEMIES: Record<string, EnemyDef> = {
     gold: 12,
     skills: ['dark_bolt'],
     undead: true,
+    weak: ['holy', 'fire'],
+    resist: ['dark', 'ice'],
   },
   shade: {
     id: 'shade',
@@ -42,22 +48,63 @@ export const ENEMIES: Record<string, EnemyDef> = {
     gold: 16,
     skills: ['dark_bolt'],
     undead: true,
+    weak: ['holy'],
+    resist: ['physical', 'dark'],
+  },
+  ruin_wisp: {
+    id: 'ruin_wisp',
+    name: 'Ruin Wisp',
+    color: 0x7ec8e3,
+    level: 4,
+    stats: { hp: 34, mp: 20, atk: 6, def: 3, mat: 13, mdf: 10, agi: 11, luk: 6 },
+    xp: 30,
+    gold: 18,
+    skills: ['magic_missile'],
+    weak: ['nature', 'physical'],
+    resist: ['fire', 'ice', 'thunder'],
+  },
+  stone_guard: {
+    id: 'stone_guard',
+    name: 'Stone Guard',
+    color: 0x8a8a84,
+    level: 5,
+    stats: { hp: 55, mp: 0, atk: 13, def: 12, mat: 4, mdf: 8, agi: 5, luk: 3 },
+    xp: 36,
+    gold: 22,
+    skills: ['power_strike'],
+    weak: ['nature', 'thunder'],
+    resist: ['physical', 'fire'],
+  },
+  echo_knight: {
+    id: 'echo_knight',
+    name: 'Echo Knight',
+    color: 0x5b6ee1,
+    level: 6,
+    stats: { hp: 110, mp: 24, atk: 15, def: 10, mat: 10, mdf: 10, agi: 11, luk: 7 },
+    xp: 90,
+    gold: 70,
+    skills: ['power_strike', 'magic_missile'],
+    isBoss: true,
+    weak: ['holy'],
+    resist: ['dark'],
   },
   ley_wraith: {
     id: 'ley_wraith',
     name: 'Ley Wraith',
     color: 0x8b4dff,
-    level: 6,
-    stats: { hp: 140, mp: 40, atk: 14, def: 8, mat: 16, mdf: 12, agi: 10, luk: 8 },
-    xp: 120,
-    gold: 80,
+    level: 7,
+    stats: { hp: 160, mp: 50, atk: 14, def: 8, mat: 17, mdf: 12, agi: 10, luk: 8 },
+    xp: 140,
+    gold: 100,
     skills: ['dark_bolt', 'necrotic_wave'],
     isBoss: true,
     undead: true,
+    weak: ['holy', 'nature'],
+    resist: ['dark', 'physical'],
   },
 };
 
-export const ENCOUNTER_TABLE: string[][] = [
+export const CAVE_ENCOUNTERS: string[][] = [
   ['slime'],
   ['slime', 'slime'],
   ['bat'],
@@ -66,3 +113,15 @@ export const ENCOUNTER_TABLE: string[][] = [
   ['skeleton', 'bat'],
   ['shade', 'skeleton'],
 ];
+
+export const RUINS_ENCOUNTERS: string[][] = [
+  ['ruin_wisp'],
+  ['stone_guard'],
+  ['ruin_wisp', 'bat'],
+  ['stone_guard', 'slime'],
+  ['shade', 'ruin_wisp'],
+  ['stone_guard', 'skeleton'],
+];
+
+/** @deprecated use CAVE_ENCOUNTERS */
+export const ENCOUNTER_TABLE = CAVE_ENCOUNTERS;

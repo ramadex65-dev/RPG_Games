@@ -2,18 +2,21 @@ import type { ClassId, Combatant, GameState, InventoryItem } from '../data/types
 import { addItem } from './inventory';
 import { createHero } from './party';
 
-const SAVE_KEY = 'seven_traditions_save_v2';
-const LEGACY_KEY = 'seven_traditions_save_v1';
+const SAVE_KEY = 'seven_traditions_save_v3';
+const LEGACY_KEYS = ['seven_traditions_save_v2', 'seven_traditions_save_v1'];
 
 export function defaultState(): GameState {
   return {
     party: [],
+    reserve: [],
     gold: 120,
     flags: { tutorialShown: false },
+    chests: {},
     location: 'town',
-    playerX: 8,
+    playerX: 11,
     playerY: 8,
     dungeonCleared: false,
+    ruinsCleared: false,
   };
 }
 
@@ -47,8 +50,9 @@ function migrateHero(raw: Partial<Combatant>): Combatant {
   };
 }
 
-function migrateState(parsed: GameState): GameState {
+function migrateState(parsed: Partial<GameState>): GameState {
   const party = (parsed.party ?? []).map(migrateHero);
+  const reserve = (parsed.reserve ?? []).map(migrateHero);
   if (Array.isArray(parsed.inventory) && parsed.inventory.length && party[0]) {
     for (const stack of parsed.inventory) {
       addItem(party[0].inventory, stack.id, stack.qty);
@@ -58,6 +62,9 @@ function migrateState(parsed: GameState): GameState {
     ...defaultState(),
     ...parsed,
     party,
+    reserve,
+    chests: parsed.chests ?? {},
+    ruinsCleared: parsed.ruinsCleared ?? false,
     inventory: undefined,
   };
 }
@@ -68,7 +75,13 @@ export function saveGame(state: GameState): void {
 }
 
 export function loadGame(): GameState | null {
-  const raw = localStorage.getItem(SAVE_KEY) ?? localStorage.getItem(LEGACY_KEY);
+  let raw = localStorage.getItem(SAVE_KEY);
+  if (!raw) {
+    for (const k of LEGACY_KEYS) {
+      raw = localStorage.getItem(k);
+      if (raw) break;
+    }
+  }
   if (!raw) return null;
   try {
     return migrateState(JSON.parse(raw) as GameState);
@@ -78,5 +91,6 @@ export function loadGame(): GameState | null {
 }
 
 export function hasSave(): boolean {
-  return localStorage.getItem(SAVE_KEY) != null || localStorage.getItem(LEGACY_KEY) != null;
+  if (localStorage.getItem(SAVE_KEY)) return true;
+  return LEGACY_KEYS.some((k) => localStorage.getItem(k) != null);
 }

@@ -1,18 +1,25 @@
 import Phaser from 'phaser';
 import { classTextureKey } from '../assets/characters';
-import { ENCOUNTER_TABLE } from '../data/enemies';
+import { CAVE_ENCOUNTERS } from '../data/enemies';
 import type { ClassId } from '../data/types';
+import { Audio } from '../systems/audio';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
-import { DUNGEON_MAP, isBlocked, TILE } from '../world/maps';
+import { chestAt, openChest } from '../world/explore';
+import { DUNGEON_MAP, isBlocked, mapPixelSize, TILE, tileColor } from '../world/maps';
+import { InventoryScreen } from '../ui/InventoryScreen';
+import { QuestLog } from '../ui/QuestLog';
 import { UI } from '../ui/theme';
 
 export class DungeonScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Image;
-  private tx = 16;
+  private tx = 20;
   private ty = 1;
   private hud!: Phaser.GameObjects.Text;
   private dialog!: Phaser.GameObjects.Text;
+  private questLog!: QuestLog;
+  private inventoryUi: InventoryScreen | null = null;
+  private chestMarks: Phaser.GameObjects.Rectangle[] = [];
   private moveCooldown = 0;
   private stepsSinceFight = 0;
   private blocked = false;
@@ -32,27 +39,40 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   create(): void {
+    Audio.unlock();
+    Audio.playMusic('dungeon');
+
     const state = Registry.get();
-    this.tx = state.location === 'dungeon' ? state.playerX : 16;
+    this.tx = state.location === 'dungeon' ? state.playerX : 20;
     this.ty = state.location === 'dungeon' ? state.playerY : 1;
+    this.tx = Phaser.Math.Clamp(this.tx, 1, DUNGEON_MAP[0].length - 2);
+    this.ty = Phaser.Math.Clamp(this.ty, 1, DUNGEON_MAP.length - 2);
     state.location = 'dungeon';
 
-    this.add.rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, 0x141018);
+    const { w, h } = mapPixelSize(DUNGEON_MAP);
+    this.cameras.main.setBounds(0, 0, w, h);
+    this.add.rectangle(w / 2, h / 2, w, h, 0x141018);
 
     for (let y = 0; y < DUNGEON_MAP.length; y++) {
       for (let x = 0; x < DUNGEON_MAP[0].length; x++) {
         const tile = DUNGEON_MAP[y][x];
-        const color =
-          tile === 1
-            ? 0x2a2433
-            : tile === 2
-              ? 0x4f7a4f
-              : tile === 6
-                ? 0x8b4dff
-                : 0x3a3348;
+        let color = tileColor(tile, false);
+        if (tile === 2) color = 0x4f7a4f;
+        if (tile === 6) color = 0x8b4dff;
         this.add.rectangle(x * TILE + TILE / 2, y * TILE + TILE / 2, TILE - 2, TILE - 2, color);
       }
     }
+
+    this.add
+      .text(1 * TILE + TILE / 2, 13 * TILE + TILE / 2, 'WRAITH', {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: '#d48cff',
+      })
+      .setOrigin(0.5)
+      .setDepth(2);
+
+    this.refreshChests();
 
     const lead = Registry.get().party[0];
     const leadKey = lead?.classId ? classTextureKey(lead.classId as ClassId) : 'char_adventurer';
@@ -60,6 +80,7 @@ export class DungeonScene extends Phaser.Scene {
       .image(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2, leadKey)
       .setDisplaySize(28, 36)
       .setDepth(5);
+    this.cameras.main.startFollow(this.player, true, 0.14, 0.14);
 
     this.hud = this.add
       .text(12, 8, '', {
@@ -69,7 +90,10 @@ export class DungeonScene extends Phaser.Scene {
         backgroundColor: '#00000088',
         padding: { x: 6, y: 3 },
       })
-      .setDepth(20);
+      .setScrollFactor(0)
+      .setDepth(40);
+
+    this.questLog = new QuestLog(this, 12, 34);
 
     this.dialog = this.add
       .text(40, this.scale.height - 80, '', {
@@ -80,16 +104,20 @@ export class DungeonScene extends Phaser.Scene {
         padding: { x: 10, y: 8 },
         wordWrap: { width: this.scale.width - 80 },
       })
-      .setDepth(20)
+      .setScrollFactor(0)
+      .setDepth(50)
       .setVisible(false);
 
     this.add
-      .text(12, this.scale.height - 22, 'Purple = Ley Wraith boss   •   Green = return to town', {
+      .text(12, this.scale.height - 22, 'Purple = Ley Wraith  •  Gold = chest (E)  •  I inventory  •  Green = town  •  N mute', {
         fontFamily: UI.font,
         fontSize: UI.tiny,
         color: UI.color.muted,
+        backgroundColor: '#00000066',
+        padding: { x: 4, y: 2 },
       })
-      .setDepth(20);
+      .setScrollFactor(0)
+      .setDepth(40);
 
     const kb = this.input.keyboard!;
     this.cursors = {
@@ -116,6 +144,14 @@ export class DungeonScene extends Phaser.Scene {
       }
     });
     this.input.keyboard!.on('keydown-E', () => this.interact());
+    this.input.keyboard!.on('keydown-I', () => this.toggleInventory());
+    this.input.keyboard!.on('keydown-ESC', () => {
+      if (this.inventoryUi) this.inventoryUi.close();
+    });
+    this.input.keyboard!.on('keydown-N', () => {
+      const muted = Audio.toggleMute();
+      this.toast(muted ? 'Audio muted.' : 'Audio on.');
+    });
 
     if (!state.flags.tutorialShown) {
       state.flags.tutorialShown = true;
@@ -123,6 +159,21 @@ export class DungeonScene extends Phaser.Scene {
     }
 
     this.refreshHud();
+  }
+
+  private toggleInventory(): void {
+    if (this.inventoryUi) {
+      this.inventoryUi.close();
+      return;
+    }
+    if (this.blocked) return;
+    Audio.sfx('confirm');
+    this.blocked = true;
+    this.inventoryUi = new InventoryScreen(this, () => {
+      this.inventoryUi = null;
+      this.blocked = false;
+      this.refreshHud();
+    });
   }
 
   update(_t: number, dt: number): void {
@@ -145,7 +196,8 @@ export class DungeonScene extends Phaser.Scene {
     this.tx = nx;
     this.ty = ny;
     this.player.setPosition(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2);
-    this.moveCooldown = 130;
+    this.moveCooldown = 120;
+    Audio.sfx('step');
     const state = Registry.get();
     state.playerX = this.tx;
     state.playerY = this.ty;
@@ -153,8 +205,8 @@ export class DungeonScene extends Phaser.Scene {
     const tile = DUNGEON_MAP[this.ty][this.tx];
     if (tile === 2) {
       state.location = 'town';
-      state.playerX = 7;
-      state.playerY = 10;
+      state.playerX = 12;
+      state.playerY = 14;
       saveGame(state);
       this.scene.start('Town');
       return;
@@ -165,6 +217,7 @@ export class DungeonScene extends Phaser.Scene {
         return;
       }
       Registry.setEncounter(['ley_wraith'], true);
+      Audio.playMusic('boss');
       this.scene.start('Battle');
       return;
     }
@@ -172,14 +225,41 @@ export class DungeonScene extends Phaser.Scene {
     this.stepsSinceFight += 1;
     if (this.stepsSinceFight >= 4 && Math.random() < 0.22) {
       this.stepsSinceFight = 0;
-      const pack = ENCOUNTER_TABLE[Math.floor(Math.random() * ENCOUNTER_TABLE.length)];
+      const pack = CAVE_ENCOUNTERS[Math.floor(Math.random() * CAVE_ENCOUNTERS.length)];
       Registry.setEncounter(pack, false);
       saveGame(state);
+      Audio.playMusic('battle');
       this.scene.start('Battle');
     }
   }
 
+  private refreshChests(): void {
+    this.chestMarks.forEach((m) => m.destroy());
+    this.chestMarks = [];
+    const state = Registry.get();
+    for (const c of [
+      { x: 3, y: 5, id: 'cave_cache' },
+      { x: 14, y: 7, id: 'cave_side' },
+    ]) {
+      if (state.chests[c.id]) continue;
+      this.chestMarks.push(
+        this.add.rectangle(c.x * TILE + TILE / 2, c.y * TILE + TILE / 2, 14, 12, 0xd4a017).setDepth(3),
+      );
+    }
+  }
+
   private interact(): void {
+    const state = Registry.get();
+    const chest = chestAt('dungeon', this.tx, this.ty);
+    if (chest) {
+      const msg = openChest(state, chest);
+      Audio.sfx('confirm');
+      saveGame(state);
+      this.refreshChests();
+      this.refreshHud();
+      this.toast(msg);
+      return;
+    }
     this.toast('A cold wind whispers: restore at the inn if you falter.');
   }
 
@@ -194,5 +274,6 @@ export class DungeonScene extends Phaser.Scene {
       `Dungeon   Gold ${s.gold}   ` +
         s.party.map((h) => `${h.name} ${h.currentHp}/${h.stats.hp}`).join('  |  '),
     );
+    this.questLog.refresh();
   }
 }

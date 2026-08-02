@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { Audio } from '../systems/audio';
 import { hasSave, loadGame } from '../systems/save';
 import { Registry } from '../systems/registry';
 import { TextMenu } from '../ui/menu';
@@ -12,6 +13,8 @@ export class TitleScene extends Phaser.Scene {
   }
 
   create(): void {
+    Audio.unlock();
+    Audio.playMusic('title');
     const { width, height } = this.scale;
     this.add.rectangle(width / 2, height / 2, width, height, 0x12182a);
 
@@ -74,7 +77,14 @@ export class TitleScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-DOWN', () => this.menu.move(1));
     this.input.keyboard!.on('keydown-W', () => this.menu.move(-1));
     this.input.keyboard!.on('keydown-S', () => this.menu.move(1));
-    this.input.keyboard!.on('keydown-ENTER', () => this.menu.confirm());
-    this.input.keyboard!.on('keydown-SPACE', () => this.menu.confirm());
+    this.input.keyboard!.on('keydown-ENTER', () => {
+      Audio.unlock();
+      this.menu.confirm();
+    });
+    this.input.keyboard!.on('keydown-SPACE', () => {
+      Audio.unlock();
+      this.menu.confirm();
+    });
+    this.input.keyboard!.on('keydown-N', () => Audio.toggleMute());
   }
 }

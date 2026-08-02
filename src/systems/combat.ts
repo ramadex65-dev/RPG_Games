@@ -17,12 +17,18 @@ function critChance(attacker: Combatant): number {
   return Math.min(0.35, 0.05 + effectiveStats(attacker).luk * 0.008);
 }
 
+function affinityMultiplier(defender: Combatant, element: SkillDef['element']): { mult: number; note?: string } {
+  if (defender.weak?.includes(element)) return { mult: 1.5, note: 'Weak!' };
+  if (defender.resist?.includes(element)) return { mult: 0.5, note: 'Resist!' };
+  return { mult: 1 };
+}
+
 function damageFormula(
   attacker: Combatant,
   defender: Combatant,
   skill: SkillDef,
   crit: boolean,
-): number {
+): { dmg: number; affinity?: string } {
   const a = effectiveStats(attacker);
   const d = effectiveStats(defender);
   const offense = skill.kind === 'magical' ? a.mat : a.atk;
@@ -31,11 +37,13 @@ function damageFormula(
   if (skill.undeadBonus && defender.undead) {
     raw = Math.floor(raw * (1 + skill.undeadBonus));
   }
+  const aff = affinityMultiplier(defender, skill.element);
+  raw = Math.max(1, Math.floor(raw * aff.mult));
   if (crit) raw = Math.floor(raw * 1.5);
   if (defender.states.some((s) => s.id === 'reckless')) {
     raw = Math.floor(raw * 1.25);
   }
-  return Math.max(1, raw);
+  return { dmg: Math.max(1, raw), affinity: aff.note };
 }
 
 export function tickStates(c: Combatant): CombatLogLine[] {
@@ -113,10 +121,10 @@ export function applySkill(
     }
 
     const crit = Math.random() < critChance(user);
-    let dmg = damageFormula(user, target, skill, crit);
+    let { dmg, affinity } = damageFormula(user, target, skill, crit);
     if (skill.id === 'action_surge') {
       const second = damageFormula(user, target, { ...skill, power: 1 }, false);
-      dmg += second;
+      dmg += second.dmg;
       logs.push({ text: `${user.name} strikes twice!` });
     }
     if (skill.id === 'sneak_attack' || user.states.some((s) => s.id === 'hide')) {
@@ -124,9 +132,10 @@ export function applySkill(
       user.states = user.states.filter((s) => s.id !== 'hide');
     }
     target.currentHp = Math.max(0, target.currentHp - dmg);
+    const tags = [crit ? 'CRIT!' : '', affinity ?? ''].filter(Boolean).join(' ');
     logs.push({
-      text: `${target.name} takes ${dmg} damage${crit ? ' (CRIT!)' : ''}.`,
-      color: crit ? '#ff6' : '#fff',
+      text: `${target.name} takes ${dmg} ${skill.element} damage${tags ? ` (${tags})` : ''}.`,
+      color: affinity === 'Weak!' ? '#9f9' : affinity === 'Resist!' ? '#fa6' : crit ? '#ff6' : '#fff',
     });
 
     if (skill.stateId && skill.kind !== 'buff' && target.currentHp > 0) {
@@ -165,22 +174,41 @@ export function strike(user: Combatant, target: Combatant): CombatLogLine[] {
     return logs;
   }
   const crit = Math.random() < critChance(user);
-  const dmg = damageFormula(user, target, fake, crit);
+  const { dmg, affinity } = damageFormula(user, target, fake, crit);
   target.currentHp = Math.max(0, target.currentHp - dmg);
+  const tags = [crit ? 'CRIT!' : '', affinity ?? ''].filter(Boolean).join(' ');
   logs.push({
-    text: `${target.name} takes ${dmg} damage${crit ? ' (CRIT!)' : ''}.`,
-    color: crit ? '#ff6' : '#fff',
+    text: `${target.name} takes ${dmg} physical damage${tags ? ` (${tags})` : ''}.`,
+    color: affinity === 'Weak!' ? '#9f9' : affinity === 'Resist!' ? '#fa6' : crit ? '#ff6' : '#fff',
   });
   if (target.currentHp <= 0) logs.push({ text: `${target.name} is defeated!`, color: '#f88' });
   return logs;
+}
+
+/** Call each enemy turn — handles Ley Wraith phase transition. */
+export function maybeBossPhase(enemy: Combatant): CombatLogLine[] {
+  if (enemy.id.replace(/_\d+$/, '') !== 'ley_wraith') return [];
+  if (enemy.phase2) return [];
+  if (enemy.currentHp > enemy.stats.hp * 0.5) return [];
+  enemy.phase2 = true;
+  enemy.stats.mat += 4;
+  enemy.stats.agi += 2;
+  if (!enemy.skills.includes('ley_surge')) enemy.skills.push('ley_surge');
+  if (!enemy.skills.includes('void_storm')) enemy.skills.push('void_storm');
+  return [
+    { text: 'The Ley Wraith fractures — Phase 2! Dark power surges!', color: '#d48cff' },
+  ];
 }
 
 export function enemyAi(enemy: Combatant, heroes: Combatant[]): { skillId?: string; target: Combatant } {
   const living = heroes.filter((h) => h.currentHp > 0);
   const target = living.slice().sort((a, b) => a.currentHp - b.currentHp)[0];
   const usable = enemy.skills.filter((id) => SKILLS[id] && enemy.currentMp >= SKILLS[id].mpCost);
-  if (usable.length && Math.random() < 0.55) {
-    const skillId = usable[Math.floor(Math.random() * usable.length)];
+  const preferHeavy =
+    enemy.phase2 && usable.filter((id) => id === 'void_storm' || id === 'ley_surge');
+  const pool = preferHeavy && preferHeavy.length && Math.random() < 0.65 ? preferHeavy : usable;
+  if (pool.length && Math.random() < (enemy.phase2 ? 0.75 : 0.55)) {
+    const skillId = pool[Math.floor(Math.random() * pool.length)];
     return { skillId, target };
   }
   return { target };

@@ -4,7 +4,15 @@ import { ENEMIES } from '../data/enemies';
 import { ITEMS } from '../data/items';
 import { SKILLS } from '../data/skills';
 import type { ClassId, Combatant } from '../data/types';
-import { applySkill, enemyAi, strike, tickStates, type CombatLogLine } from '../systems/combat';
+import {
+  applySkill,
+  enemyAi,
+  maybeBossPhase,
+  strike,
+  tickStates,
+  type CombatLogLine,
+} from '../systems/combat';
+import { Audio } from '../systems/audio';
 import { addItem, listPartyConsumables, pruneEmpty, removeItem } from '../systems/inventory';
 import { grantXp } from '../systems/party';
 import { Registry } from '../systems/registry';
@@ -15,6 +23,12 @@ import { UI } from '../ui/theme';
 
 type Phase = 'command' | 'skill' | 'item' | 'target' | 'animating' | 'won' | 'lost';
 
+interface HpBar {
+  bg: Phaser.GameObjects.Rectangle;
+  fill: Phaser.GameObjects.Rectangle;
+  maxW: number;
+}
+
 export class BattleScene extends Phaser.Scene {
   private heroes: Combatant[] = [];
   private enemies: Combatant[] = [];
@@ -24,8 +38,12 @@ export class BattleScene extends Phaser.Scene {
   private menu: TextMenu | null = null;
   private combatLog!: CombatLog;
   private statusText!: Phaser.GameObjects.Text;
+  private turnBanner!: Phaser.GameObjects.Text;
   private enemySprites: Phaser.GameObjects.Image[] = [];
   private heroSprites: Phaser.GameObjects.Image[] = [];
+  private enemyBars: HpBar[] = [];
+  private heroBars: HpBar[] = [];
+  private turnGlow!: Phaser.GameObjects.Ellipse;
   private pendingSkill: string | null = null;
   private pendingItem: string | null = null;
   private pendingItemOwner = 0;
@@ -36,7 +54,11 @@ export class BattleScene extends Phaser.Scene {
   }
 
   create(): void {
+    Audio.unlock();
     const encounter = Registry.consumeEncounter();
+    this.boss = encounter?.boss ?? false;
+    Audio.playMusic(this.boss ? 'boss' : 'battle');
+
     const state = Registry.get();
     this.heroes = state.party.map((h) => ({
       ...h,
@@ -45,7 +67,6 @@ export class BattleScene extends Phaser.Scene {
       inventory: h.inventory.map((i) => ({ ...i })),
       equipment: { ...h.equipment },
     }));
-    this.boss = encounter?.boss ?? false;
     const ids = encounter?.enemies ?? ['slime'];
     this.enemies = ids.map((id, i) => {
       const def = ENEMIES[id];
@@ -62,19 +83,24 @@ export class BattleScene extends Phaser.Scene {
         states: [],
         color: def.color,
         undead: def.undead,
+        weak: def.weak,
+        resist: def.resist,
         equipment: {},
         inventory: [],
+        phase2: false,
       };
     });
 
     this.add.rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, 0x1a1428);
     this.add.rectangle(this.scale.width / 2, 200, this.scale.width, 200, 0x2a2038);
 
+    this.turnGlow = this.add.ellipse(0, 0, 70, 20, 0xffe08a, 0.35).setVisible(false).setDepth(1);
+
     this.enemies.forEach((e, i) => {
       const x = 160 + i * 120;
       const y = 150;
       const baseId = e.id.replace(/_\d+$/, '');
-      const sprite = this.add.image(x, y, enemyTextureKey(baseId)).setScale(this.boss ? 1.35 : 1.15);
+      const sprite = this.add.image(x, y, enemyTextureKey(baseId)).setScale(this.boss ? 1.35 : 1.15).setDepth(2);
       this.enemySprites.push(sprite);
       this.add
         .text(x, y + 42, e.name, {
@@ -82,21 +108,25 @@ export class BattleScene extends Phaser.Scene {
           fontSize: UI.tiny,
           color: '#f0e8d8',
         })
-        .setOrigin(0.5);
+        .setOrigin(0.5)
+        .setDepth(3);
+      this.enemyBars.push(this.makeBar(x - 22, y + 52, 44, e.color));
     });
 
     this.heroes.forEach((h, i) => {
       const x = 520 + (i % 2) * 100;
       const y = 110 + Math.floor(i / 2) * 85;
       const key = classTextureKey(h.classId as ClassId);
-      this.heroSprites.push(this.add.image(x, y, key).setScale(1.05));
+      this.heroSprites.push(this.add.image(x, y, key).setScale(1.05).setDepth(2));
       this.add
         .text(x, y + 38, h.name, {
           fontFamily: UI.font,
           fontSize: UI.tiny,
           color: UI.color.cream,
         })
-        .setOrigin(0.5);
+        .setOrigin(0.5)
+        .setDepth(3);
+      this.heroBars.push(this.makeBar(x - 22, y + 48, 44, 0x58c26a));
     });
 
     this.statusText = this.add.text(28, 310, '', {
@@ -106,6 +136,16 @@ export class BattleScene extends Phaser.Scene {
       lineSpacing: 3,
     });
 
+    this.turnBanner = this.add
+      .text(400, 288, '', {
+        fontFamily: UI.font,
+        fontSize: UI.small,
+        color: UI.color.accent,
+        backgroundColor: '#00000088',
+        padding: { x: 8, y: 3 },
+      })
+      .setOrigin(0.5, 0);
+
     this.combatLog = new CombatLog(this, 400, 305, 372, 140);
 
     this.add.text(28, 14, this.boss ? 'BOSS BATTLE' : 'BATTLE', {
@@ -114,13 +154,18 @@ export class BattleScene extends Phaser.Scene {
       color: this.boss ? '#d48cff' : UI.color.cream,
     });
 
-    // Fresh log every fight
     this.combatLog.clear();
     this.buildTurnOrder();
     this.pushLog({ text: this.boss ? 'The Ley Wraith emerges!' : 'Enemies draw near!' });
     this.refreshStatus();
     this.bindKeys();
     this.beginTurn();
+  }
+
+  private makeBar(x: number, y: number, w: number, color: number): HpBar {
+    const bg = this.add.rectangle(x, y, w, 5, 0x1a1020).setOrigin(0, 0.5).setDepth(3);
+    const fill = this.add.rectangle(x, y, w, 5, color).setOrigin(0, 0.5).setDepth(4);
+    return { bg, fill, maxW: w };
   }
 
   private bindKeys(): void {
@@ -130,9 +175,13 @@ export class BattleScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-S', () => this.menu?.move(1));
     this.input.keyboard!.on('keydown-ENTER', () => this.onConfirm());
     this.input.keyboard!.on('keydown-SPACE', () => this.onConfirm());
-    this.input.keyboard!.on('keydown-ESC', () => this.onCancel());
+    this.input.keyboard!.on('keydown-ESC', () => {
+      Audio.sfx('cancel');
+      this.onCancel();
+    });
     this.input.keyboard!.on('keydown-PAGE_UP', () => this.combatLog.nudgeScroll(-1));
     this.input.keyboard!.on('keydown-PAGE_DOWN', () => this.combatLog.nudgeScroll(1));
+    this.input.keyboard!.on('keydown-N', () => Audio.toggleMute());
   }
 
   private onConfirm(): void {
@@ -153,6 +202,100 @@ export class BattleScene extends Phaser.Scene {
       this.pendingItem = null;
       this.showCommandMenu();
     }
+  }
+
+  private spriteFor(c: Combatant): Phaser.GameObjects.Image | undefined {
+    if (c.isPlayer) {
+      const i = this.heroes.indexOf(c);
+      return this.heroSprites[i];
+    }
+    const i = this.enemies.indexOf(c);
+    return this.enemySprites[i];
+  }
+
+  private highlightTurn(actor: Combatant): void {
+    const heroBase = 1.05;
+    const enemyBase = this.boss ? 1.35 : 1.15;
+    this.heroSprites.forEach((s) => {
+      s.clearTint();
+      s.setScale(heroBase);
+    });
+    this.enemySprites.forEach((s) => {
+      s.clearTint();
+      s.setScale(enemyBase);
+    });
+
+    const spr = this.spriteFor(actor);
+    if (!spr) {
+      this.turnGlow.setVisible(false);
+      this.turnBanner.setText('');
+      return;
+    }
+    const base = actor.isPlayer ? heroBase : enemyBase;
+    spr.setTint(0xfff2c0);
+    spr.setScale(base * 1.1);
+    this.turnGlow.setPosition(spr.x, spr.y + 34).setVisible(true);
+    this.turnBanner.setText(`TURN: ${actor.name}`);
+  }
+
+  private animateStrike(
+    actor: Combatant,
+    targets: Combatant[],
+    kind: 'hit' | 'heal',
+    then: () => void,
+  ): void {
+    const spr = this.spriteFor(actor);
+    if (!spr) {
+      then();
+      return;
+    }
+    const originX = spr.x;
+    const dir = actor.isPlayer ? -1 : 1;
+    const primary = targets[0] ? this.spriteFor(targets[0]) : undefined;
+
+    this.tweens.add({
+      targets: spr,
+      x: originX + dir * 28,
+      duration: 90,
+      yoyo: true,
+      onYoyo: () => {
+        if (kind === 'heal') Audio.sfx('heal');
+        else Audio.sfx('hit');
+        for (const t of targets) {
+          const ts = this.spriteFor(t);
+          if (!ts) continue;
+          if (kind === 'heal') {
+            ts.setTint(0x80ffb0);
+            this.time.delayedCall(120, () => ts.clearTint());
+          } else {
+            this.tweens.add({
+              targets: ts,
+              alpha: 0.3,
+              duration: 50,
+              yoyo: true,
+              repeat: 2,
+              onComplete: () => ts.setAlpha(t.currentHp <= 0 ? 0.2 : 1),
+            });
+            ts.setTint(0xff6060);
+            this.time.delayedCall(140, () => {
+              if (t.currentHp > 0) ts.clearTint();
+            });
+          }
+        }
+        if (primary) {
+          this.tweens.add({
+            targets: primary,
+            x: primary.x - dir * 8,
+            duration: 60,
+            yoyo: true,
+          });
+        }
+      },
+      onComplete: () => {
+        spr.x = originX;
+        then();
+      },
+    });
   }
 
   private buildTurnOrder(): void {
@@ -183,6 +326,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    this.highlightTurn(actor);
     this.pushLog({ text: `— ${actor.name}'s turn —`, color: '#ffe08a' });
     for (const line of tickStates(actor)) this.pushLog(line);
 
@@ -193,7 +337,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (actor.isPlayer) this.showCommandMenu();
-    else this.time.delayedCall(450, () => this.runEnemy(actor));
+    else this.time.delayedCall(400, () => this.runEnemy(actor));
   }
 
   private showCommandMenu(): void {
@@ -224,7 +368,8 @@ export class BattleScene extends Phaser.Scene {
           } else if (Math.random() < 0.55) {
             this.pushLog({ text: 'You fled!' });
             this.syncParty();
-            this.scene.start('Dungeon');
+            Audio.playMusic('dungeon');
+            this.scene.start(Registry.get().location === 'ruins' ? 'Ruins' : 'Dungeon');
           } else {
             this.pushLog({ text: 'Could not escape!', color: '#fa6' });
             this.advance();
@@ -337,76 +482,81 @@ export class BattleScene extends Phaser.Scene {
         return;
       }
       owner.inventory = pruneEmpty(owner.inventory);
-      if (item.healHp) {
-        target.currentHp = Math.min(target.stats.hp, target.currentHp + item.healHp);
-        this.pushLog({
-          text: `${actor.name} uses ${owner.name}'s ${item.name} on ${target.name} (+${item.healHp} HP).`,
-          color: '#7f7',
-        });
-      }
-      if (item.healMp) {
-        target.currentMp = Math.min(target.stats.mp, target.currentMp + item.healMp);
-        this.pushLog({ text: `${target.name} recovers ${item.healMp} MP.`, color: '#8cf' });
-      }
-      this.pendingItem = null;
-      this.refreshStatus();
-      this.advance();
+      this.animateStrike(actor, [target], 'heal', () => {
+        if (item.healHp) {
+          target.currentHp = Math.min(target.stats.hp, target.currentHp + item.healHp);
+          this.pushLog({
+            text: `${actor.name} uses ${owner.name}'s ${item.name} on ${target.name} (+${item.healHp} HP).`,
+            color: '#7f7',
+          });
+        }
+        if (item.healMp) {
+          target.currentMp = Math.min(target.stats.mp, target.currentMp + item.healMp);
+          this.pushLog({ text: `${target.name} recovers ${item.healMp} MP.`, color: '#8cf' });
+        }
+        this.pendingItem = null;
+        this.refreshStatus();
+        this.advance();
+      });
       return;
     }
 
-    if (this.pendingSkill === '__strike__') {
-      for (const line of strike(actor, targets[0])) this.pushLog(line);
-      this.pendingSkill = null;
+    const skillId = this.pendingSkill;
+    this.pendingSkill = null;
+    const isHeal =
+      !!skillId &&
+      skillId !== '__strike__' &&
+      SKILLS[skillId]?.kind === 'heal';
+
+    this.animateStrike(actor, targets, isHeal ? 'heal' : 'hit', () => {
+      if (skillId === '__strike__') {
+        for (const line of strike(actor, targets[0])) this.pushLog(line);
+      } else if (skillId) {
+        const result = applySkill(
+          actor,
+          skillId,
+          targets,
+          this.heroes.filter((h) => h.currentHp > 0),
+        );
+        for (const line of result.logs) this.pushLog(line);
+        if (result.stolenGold) Registry.get().gold += result.stolenGold;
+        if (result.stolenItem) addItem(actor.inventory, result.stolenItem, 1);
+      }
       this.refreshStatus();
       this.updateEnemyVisuals();
       this.advance();
-      return;
-    }
-
-    if (this.pendingSkill) {
-      const result = applySkill(
-        actor,
-        this.pendingSkill,
-        targets,
-        this.heroes.filter((h) => h.currentHp > 0),
-      );
-      for (const line of result.logs) this.pushLog(line);
-      if (result.stolenGold) Registry.get().gold += result.stolenGold;
-      if (result.stolenItem) {
-        addItem(actor.inventory, result.stolenItem, 1);
-      }
-      this.pendingSkill = null;
-    }
-
-    this.refreshStatus();
-    this.updateEnemyVisuals();
-    this.advance();
+    });
   }
 
   private runEnemy(actor: Combatant): void {
     this.phase = 'animating';
+    for (const line of maybeBossPhase(actor)) this.pushLog(line);
     const { skillId, target } = enemyAi(actor, this.heroes);
-    if (skillId) {
-      const skill = SKILLS[skillId];
-      const targets =
-        skill.target === 'enemies' ? this.heroes.filter((h) => h.currentHp > 0) : [target];
-      const result = applySkill(
-        actor,
-        skillId,
-        targets,
-        this.enemies.filter((e) => e.currentHp > 0),
-      );
-      for (const line of result.logs) this.pushLog(line);
-    } else {
-      for (const line of strike(actor, target)) this.pushLog(line);
-    }
-    this.refreshStatus();
-    this.advance();
+    const skill = skillId ? SKILLS[skillId] : null;
+    const targets =
+      skill?.target === 'enemies' ? this.heroes.filter((h) => h.currentHp > 0) : [target];
+    const isHeal = skill?.kind === 'heal';
+
+    this.animateStrike(actor, targets, isHeal ? 'heal' : 'hit', () => {
+      if (skillId) {
+        const result = applySkill(
+          actor,
+          skillId,
+          targets,
+          this.enemies.filter((e) => e.currentHp > 0),
+        );
+        for (const line of result.logs) this.pushLog(line);
+      } else {
+        for (const line of strike(actor, target)) this.pushLog(line);
+      }
+      this.refreshStatus();
+      this.advance();
+    });
   }
 
   private advance(): void {
     this.turnIndex += 1;
-    this.time.delayedCall(350, () => {
+    this.time.delayedCall(280, () => {
       if (!this.checkEnd()) this.beginTurn();
     });
   }
@@ -417,12 +567,16 @@ export class BattleScene extends Phaser.Scene {
     if (!heroesAlive) {
       this.phase = 'lost';
       this.menu?.destroy();
+      this.turnGlow.setVisible(false);
+      Audio.sfx('defeat');
       this.pushLog({ text: 'Your party has fallen... Press Enter.', color: '#f66' });
       return true;
     }
     if (!enemiesAlive) {
       this.phase = 'won';
       this.menu?.destroy();
+      this.turnGlow.setVisible(false);
+      Audio.sfx('victory');
       this.resolveRewards();
       this.pushLog({ text: 'Victory! Press Enter to continue.', color: '#9f9' });
       return true;
@@ -449,11 +603,26 @@ export class BattleScene extends Phaser.Scene {
       for (const n of notes) this.pushLog({ text: n, color: '#9cf' });
     }
     if (this.boss) {
-      state.dungeonCleared = true;
-      this.pushLog({
-        text: 'The Ley Wraith dissolves into starlight. The ley lines calm.',
-        color: '#d48cff',
-      });
+      const bossId = this.enemies[0]?.id.replace(/_\d+$/, '') ?? '';
+      if (bossId === 'ley_wraith') {
+        state.dungeonCleared = true;
+        state.flags.quest_main_complete = true;
+        this.pushLog({
+          text: 'Quest update: The Ley Wraith is banished. Seek the Ruins of Echoes.',
+          color: '#d48cff',
+        });
+      }
+      if (bossId === 'echo_knight') {
+        state.ruinsCleared = true;
+        this.pushLog({
+          text: 'Quest update: The Echo Knight falls. The ruins are still.',
+          color: '#9cf',
+        });
+      }
+      if (state.dungeonCleared && state.ruinsCleared) {
+        state.flags.game_cleared = true;
+        this.pushLog({ text: 'Both threats are ended — the Circle endures!', color: '#ffe08a' });
+      }
     }
     this.syncParty();
     saveGame(Registry.get());
@@ -463,8 +632,24 @@ export class BattleScene extends Phaser.Scene {
     this.syncParty();
     saveGame(Registry.get());
     this.combatLog.clear();
-    if (this.boss) this.scene.start('Town');
-    else this.scene.start('Dungeon');
+    const state = Registry.get();
+    if (state.flags.game_cleared && this.boss) {
+      this.scene.start('Victory');
+      return;
+    }
+    if (this.boss) {
+      Audio.playMusic('town');
+      this.scene.start('Town');
+      return;
+    }
+    const loc = state.location;
+    if (loc === 'ruins') {
+      Audio.playMusic('dungeon');
+      this.scene.start('Ruins');
+    } else {
+      Audio.playMusic('dungeon');
+      this.scene.start('Dungeon');
+    }
   }
 
   private syncParty(): void {
@@ -482,6 +667,16 @@ export class BattleScene extends Phaser.Scene {
     this.combatLog.push(line);
   }
 
+  private setBar(bar: HpBar, ratio: number): void {
+    const w = Math.max(0.001, bar.maxW * Phaser.Math.Clamp(ratio, 0, 1));
+    this.tweens.add({
+      targets: bar.fill,
+      width: w,
+      duration: 180,
+      ease: 'Sine.easeOut',
+    });
+  }
+
   private refreshStatus(): void {
     this.statusText.setText(
       this.heroes
@@ -493,6 +688,10 @@ export class BattleScene extends Phaser.Scene {
     );
     this.heroes.forEach((h, i) => {
       this.heroSprites[i]?.setAlpha(h.currentHp <= 0 ? 0.25 : 1);
+      if (this.heroBars[i]) this.setBar(this.heroBars[i], h.currentHp / h.stats.hp);
+    });
+    this.enemies.forEach((e, i) => {
+      if (this.enemyBars[i]) this.setBar(this.enemyBars[i], e.currentHp / e.stats.hp);
     });
   }
 

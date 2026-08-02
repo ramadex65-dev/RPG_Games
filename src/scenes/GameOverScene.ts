@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { Audio } from '../systems/audio';
 import { loadGame } from '../systems/save';
 import { Registry } from '../systems/registry';
 import { UI } from '../ui/theme';
@@ -9,6 +10,8 @@ export class GameOverScene extends Phaser.Scene {
   }
 
   create(): void {
+    Audio.stopMusic();
+    Audio.sfx('defeat');
     const { width, height } = this.scale;
     this.add.rectangle(width / 2, height / 2, width, height, 0x120a12);
     this.add
@@ -33,9 +36,10 @@ export class GameOverScene extends Phaser.Scene {
           if (h.currentHp <= 0) h.currentHp = Math.max(1, Math.floor(h.stats.hp * 0.3));
         }
         save.location = 'town';
-        save.playerX = 8;
+        save.playerX = 11;
         save.playerY = 8;
         Registry.set(save);
+        Audio.playMusic('town');
         this.scene.start('Town');
       } else {
         this.scene.start('Title');

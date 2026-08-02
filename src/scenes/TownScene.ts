@@ -1,29 +1,40 @@
 import Phaser from 'phaser';
 import { classTextureKey } from '../assets/characters';
+import { TOWN_NPCS } from '../assets/npcs';
+import { getClass } from '../data/classes';
 import { canEquip, ITEMS, shopStockForParty } from '../data/items';
+import { activeQuestText } from '../data/quests';
 import type { ClassId, Combatant } from '../data/types';
-import { addItem, equipItem, formatBag, pruneEmpty } from '../systems/inventory';
+import { Audio } from '../systems/audio';
+import { addItem, equipItem, equipPreview, shopBonusBits, shopItemRows } from '../systems/inventory';
+import { missingClassIds, recruitClass, swapWithReserve } from '../systems/party';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
-import { isBlocked, TILE, TOWN_MAP } from '../world/maps';
+import { isBlocked, mapPixelSize, TILE, tileColor, TOWN_MAP } from '../world/maps';
+import { InventoryScreen } from '../ui/InventoryScreen';
 import { TextMenu } from '../ui/menu';
+import { QuestLog } from '../ui/QuestLog';
 import { UI } from '../ui/theme';
 
-type Mode = 'explore' | 'dialog' | 'shop' | 'menu';
+type Mode = 'explore' | 'dialog' | 'shop' | 'menu' | 'inventory';
 
 export class TownScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Image;
-  private tx = 8;
+  private tx = 11;
   private ty = 8;
   private mode: Mode = 'explore';
   private dialogText!: Phaser.GameObjects.Text;
   private hud!: Phaser.GameObjects.Text;
+  private districtText!: Phaser.GameObjects.Text;
   private overlay!: Phaser.GameObjects.Container;
   private menu: TextMenu | null = null;
+  private inventoryUi: InventoryScreen | null = null;
+  private shopDetail: Phaser.GameObjects.Text | null = null;
+  private questLog!: QuestLog;
   private moveCooldown = 0;
   private shopStock: string[] = [];
   private pendingBuyId: string | null = null;
-  private invHeroIndex = 0;
+  private dialogQueue: string[] = [];
   private keys!: {
     left: Phaser.Input.Keyboard.Key;
     right: Phaser.Input.Keyboard.Key;
@@ -40,30 +51,95 @@ export class TownScene extends Phaser.Scene {
   }
 
   create(): void {
-    const state = Registry.get();
-    this.tx = state.location === 'town' ? state.playerX : 8;
-    this.ty = state.location === 'town' ? state.playerY : 8;
-    state.location = 'town';
+    Audio.unlock();
+    Audio.playMusic('town');
 
-    this.add.rectangle(this.scale.width / 2, this.scale.height / 2, this.scale.width, this.scale.height, 0x1b2a1f);
+    const state = Registry.get();
+    this.tx = state.location === 'town' ? state.playerX : 11;
+    this.ty = state.location === 'town' ? state.playerY : 8;
+    // Clamp legacy saves into new map
+    this.tx = Phaser.Math.Clamp(this.tx, 1, TOWN_MAP[0].length - 2);
+    this.ty = Phaser.Math.Clamp(this.ty, 1, TOWN_MAP.length - 2);
+    state.location = 'town';
+    state.playerX = this.tx;
+    state.playerY = this.ty;
+
+    const { w, h } = mapPixelSize(TOWN_MAP);
+    this.cameras.main.setBounds(0, 0, w, h);
+    this.add.rectangle(w / 2, h / 2, w, h, 0x1b2a1f);
 
     for (let y = 0; y < TOWN_MAP.length; y++) {
       for (let x = 0; x < TOWN_MAP[0].length; x++) {
         const tile = TOWN_MAP[y][x];
-        // Special tiles get grass under buildings; walls stay solid
-        const color = tile === 1 ? 0x3a4a3a : 0x4f7a4f;
-        this.add.rectangle(x * TILE + TILE / 2, y * TILE + TILE / 2, TILE - 2, TILE - 2, color);
+        this.add.rectangle(
+          x * TILE + TILE / 2,
+          y * TILE + TILE / 2,
+          TILE - 2,
+          TILE - 2,
+          tileColor(tile, true),
+        );
       }
     }
 
-    // Building art sits above door tiles (store / inn / cave)
-    this.add.image(6 * TILE + TILE / 2, 2 * TILE + TILE / 2, 'building_store').setDisplaySize(92, 76).setDepth(2);
-    this.add.image(9 * TILE + TILE / 2, 2 * TILE + TILE / 2, 'building_inn').setDisplaySize(92, 76).setDepth(2);
-    this.add.image(7 * TILE + TILE / 2, 9 * TILE + TILE / 2 + 6, 'building_cave').setDisplaySize(100, 82).setDepth(2);
+    // District labels
+    this.add
+      .text(9 * TILE, 1 * TILE + 8, 'MARKET DISTRICT', {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: '#e8d5a0',
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(2);
+    this.add
+      .text(17 * TILE, 1 * TILE + 8, 'TEMPLE GREEN', {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: '#c8e8c0',
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(2);
+    this.add
+      .text(12 * TILE, 13 * TILE, 'CAVE ROAD', {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: '#c8c0d8',
+      })
+      .setOrigin(0.5)
+      .setDepth(2);
 
-    // Door mats underfoot
-    this.add.rectangle(6 * TILE + TILE / 2, 3 * TILE + TILE / 2 + 8, 20, 10, 0x5a3420).setDepth(1);
-    this.add.rectangle(9 * TILE + TILE / 2, 3 * TILE + TILE / 2 + 8, 20, 10, 0x5a2e1a).setDepth(1);
+    this.add.image(9 * TILE + TILE / 2, 2 * TILE + TILE / 2, 'building_store').setDisplaySize(92, 76).setDepth(2);
+    this.add.image(16 * TILE + TILE / 2, 2 * TILE + TILE / 2, 'building_inn').setDisplaySize(92, 76).setDepth(2);
+    this.add.image(12 * TILE + TILE / 2, 13 * TILE + TILE / 2, 'building_cave').setDisplaySize(100, 82).setDepth(2);
+    // Ruins marker (southeast)
+    this.add.rectangle(20 * TILE + TILE / 2, 14 * TILE + TILE / 2, 36, 28, 0x4a4a62).setDepth(2);
+    this.add
+      .text(20 * TILE + TILE / 2, 14 * TILE + TILE / 2, 'RUINS', {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: '#c8c8e8',
+      })
+      .setOrigin(0.5)
+      .setDepth(3);
+
+    this.add.rectangle(9 * TILE + TILE / 2, 3 * TILE + TILE / 2 + 8, 20, 10, 0x5a3420).setDepth(1);
+    this.add.rectangle(16 * TILE + TILE / 2, 3 * TILE + TILE / 2 + 8, 20, 10, 0x5a2e1a).setDepth(1);
+
+    for (const npc of TOWN_NPCS) {
+      this.add
+        .image(npc.x * TILE + TILE / 2, npc.y * TILE + TILE / 2, npc.texture)
+        .setDisplaySize(26, 34)
+        .setDepth(4);
+      this.add
+        .text(npc.x * TILE + TILE / 2, npc.y * TILE + TILE / 2 + 20, npc.name.split(' ').pop()!, {
+          fontFamily: UI.font,
+          fontSize: '9px',
+          color: '#f5f0e4',
+          backgroundColor: '#00000066',
+          padding: { x: 2, y: 1 },
+        })
+        .setOrigin(0.5)
+        .setDepth(4);
+    }
 
     const lead = Registry.get().party[0];
     const leadKey = lead?.classId ? classTextureKey(lead.classId as ClassId) : 'char_adventurer';
@@ -71,6 +147,8 @@ export class TownScene extends Phaser.Scene {
       .image(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2, leadKey)
       .setDisplaySize(28, 36)
       .setDepth(5);
+    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    this.cameras.main.setZoom(1);
 
     this.hud = this.add
       .text(12, 8, '', {
@@ -81,10 +159,24 @@ export class TownScene extends Phaser.Scene {
         padding: { x: 6, y: 3 },
       })
       .setScrollFactor(0)
-      .setDepth(20);
+      .setDepth(40);
+
+    this.districtText = this.add
+      .text(this.scale.width - 12, 8, '', {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: UI.color.accent,
+        backgroundColor: '#00000088',
+        padding: { x: 6, y: 3 },
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(40);
+
+    this.questLog = new QuestLog(this, 12, 34);
 
     this.dialogText = this.add
-      .text(40, this.scale.height - 80, '', {
+      .text(40, this.scale.height - 90, '', {
         fontFamily: UI.font,
         fontSize: UI.small,
         color: '#f5f0e4',
@@ -92,18 +184,22 @@ export class TownScene extends Phaser.Scene {
         padding: { x: 10, y: 8 },
         wordWrap: { width: this.scale.width - 80 },
       })
-      .setDepth(20)
+      .setScrollFactor(0)
+      .setDepth(50)
       .setVisible(false);
 
-    this.overlay = this.add.container(0, 0).setDepth(30).setVisible(false);
+    this.overlay = this.add.container(0, 0).setScrollFactor(0).setDepth(60).setVisible(false);
 
     this.add
-      .text(12, this.scale.height - 22, 'WASD move  •  E interact  •  M menu  •  Stand on store / inn / cave door', {
+      .text(12, this.scale.height - 22, 'WASD move  •  E talk/enter  •  I inventory  •  M menu  •  N mute', {
         fontFamily: UI.font,
         fontSize: UI.tiny,
         color: UI.color.muted,
+        backgroundColor: '#00000066',
+        padding: { x: 4, y: 2 },
       })
-      .setDepth(20);
+      .setScrollFactor(0)
+      .setDepth(40);
 
     const kb = this.input.keyboard!;
     this.keys = {
@@ -137,51 +233,105 @@ export class TownScene extends Phaser.Scene {
   private bindKeys(): void {
     this.input.keyboard!.on('keydown-E', () => this.interact());
     this.input.keyboard!.on('keydown-ENTER', () => {
-      if (this.mode === 'dialog') this.closeDialog();
+      if (this.mode === 'dialog') this.advanceDialog();
       else if (this.mode === 'shop' || this.mode === 'menu') this.menu?.confirm();
     });
     this.input.keyboard!.on('keydown-SPACE', () => {
-      if (this.mode === 'dialog') this.closeDialog();
+      if (this.mode === 'dialog') this.advanceDialog();
       else if (this.mode === 'shop' || this.mode === 'menu') this.menu?.confirm();
     });
-    this.input.keyboard!.on('keydown-ESC', () => this.closeOverlay());
+    this.input.keyboard!.on('keydown-ESC', () => {
+      if (this.mode === 'inventory') {
+        this.inventoryUi?.close();
+        return;
+      }
+      Audio.sfx('cancel');
+      this.closeOverlay();
+    });
+    this.input.keyboard!.on('keydown-I', () => this.toggleInventory());
     this.input.keyboard!.on('keydown-M', () => this.openGameMenu());
+    this.input.keyboard!.on('keydown-N', () => {
+      const muted = Audio.toggleMute();
+      this.showDialog(muted ? 'Audio muted.' : 'Audio on.');
+    });
     this.input.keyboard!.on('keydown-UP', () => this.menu?.move(-1));
     this.input.keyboard!.on('keydown-DOWN', () => this.menu?.move(1));
+  }
+
+  private toggleInventory(): void {
+    if (this.mode === 'inventory') {
+      this.inventoryUi?.close();
+      return;
+    }
+    if (this.mode !== 'explore') return;
+    Audio.sfx('confirm');
+    this.mode = 'inventory';
+    this.inventoryUi = new InventoryScreen(this, () => {
+      this.inventoryUi = null;
+      this.mode = 'explore';
+      this.refreshHud();
+    });
   }
 
   private tryMove(dx: number, dy: number): void {
     const nx = this.tx + dx;
     const ny = this.ty + dy;
     if (isBlocked(TOWN_MAP, nx, ny)) return;
+    if (TOWN_NPCS.some((n) => n.x === nx && n.y === ny)) return;
     this.tx = nx;
     this.ty = ny;
     this.player.setPosition(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2);
-    this.moveCooldown = 140;
+    this.moveCooldown = 130;
+    Audio.sfx('step');
     const state = Registry.get();
     state.playerX = this.tx;
     state.playerY = this.ty;
+    this.refreshHud();
   }
 
   private interact(): void {
     if (this.mode !== 'explore') return;
+    const npc = TOWN_NPCS.find(
+      (n) =>
+        (Math.abs(n.x - this.tx) === 1 && n.y === this.ty) ||
+        (Math.abs(n.y - this.ty) === 1 && n.x === this.tx) ||
+        (n.x === this.tx && n.y === this.ty),
+    );
+    if (npc) {
+      Audio.sfx('confirm');
+      this.startDialog(npc.dialog);
+      return;
+    }
+
     const tile = TOWN_MAP[this.ty][this.tx];
-    // Also allow interacting from the tile south of buildings (doorway feel)
     const above = this.ty > 0 ? TOWN_MAP[this.ty - 1][this.tx] : 0;
     if (tile === 3 || above === 3) this.openShop();
     else if (tile === 4 || above === 4) this.useInn();
     else if (tile === 5 || above === 5) this.enterDungeon();
-    else this.showDialog('Elder: The Ley Wraith stirs beneath the cave. Outfit your party at the store.');
+    else if (tile === 10 || above === 10) this.enterRuins();
+    else this.startDialog(['The wind carries a faint hum from the southern cave and eastern ruins.']);
+  }
+
+  private startDialog(lines: string[]): void {
+    this.dialogQueue = [...lines];
+    this.mode = 'dialog';
+    this.advanceDialog();
+  }
+
+  private advanceDialog(): void {
+    if (!this.dialogQueue.length) {
+      this.dialogText.setVisible(false);
+      this.mode = 'explore';
+      return;
+    }
+    const line = this.dialogQueue.shift()!;
+    this.dialogText
+      .setText(line + (this.dialogQueue.length ? '\n\n[Enter] next' : '\n\n[Enter] close'))
+      .setVisible(true);
   }
 
   private showDialog(text: string): void {
-    this.mode = 'dialog';
-    this.dialogText.setText(text + '\n\n[Enter] continue').setVisible(true);
-  }
-
-  private closeDialog(): void {
-    this.dialogText.setVisible(false);
-    this.mode = 'explore';
+    this.startDialog([text]);
   }
 
   private useInn(): void {
@@ -197,6 +347,7 @@ export class TownScene extends Phaser.Scene {
       h.currentMp = h.stats.mp;
       h.states = [];
     }
+    Audio.sfx('heal');
     saveGame(state);
     this.refreshHud();
     this.showDialog('Innkeeper: Rest well by the hearth. Your party is fully restored. (-15g)');
@@ -205,13 +356,26 @@ export class TownScene extends Phaser.Scene {
   private enterDungeon(): void {
     const state = Registry.get();
     state.location = 'dungeon';
-    state.playerX = 16;
+    state.flags.entered_cave = true;
+    state.playerX = 20;
     state.playerY = 1;
     saveGame(state);
+    Audio.playMusic('dungeon');
     this.scene.start('Dungeon');
   }
 
+  private enterRuins(): void {
+    const state = Registry.get();
+    state.location = 'ruins';
+    state.playerX = 1;
+    state.playerY = 1;
+    saveGame(state);
+    Audio.playMusic('dungeon');
+    this.scene.start('Ruins');
+  }
+
   private openShop(): void {
+    Audio.sfx('confirm');
     this.mode = 'shop';
     this.pendingBuyId = null;
     const state = Registry.get();
@@ -224,34 +388,56 @@ export class TownScene extends Phaser.Scene {
     this.overlay.setVisible(true);
     this.menu?.destroy();
 
-    const panel = this.add.rectangle(400, 270, 480, 380, 0x111820, 0.96).setStrokeStyle(2, 0xc2a35a);
-    const title = this.add.text(200, 100, 'General Store — gear for your party', {
+    const panel = this.add
+      .rectangle(400, 300, 700, 500, 0x0e141c, 0.98)
+      .setStrokeStyle(2, 0xc2a35a);
+    const headerBar = this.add.rectangle(400, 70, 700, 48, 0x1a2838, 1);
+    const title = this.add
+      .text(400, 62, 'GENERAL STORE', {
+        fontFamily: UI.font,
+        fontSize: '18px',
+        color: UI.color.cream,
+      })
+      .setOrigin(0.5);
+    const gold = this.add
+      .text(400, 84, `Your gold: ${Registry.get().gold}g   ·   Click an item or use ↑↓ / Enter`, {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: UI.color.accent,
+      })
+      .setOrigin(0.5);
+
+    const listBg = this.add
+      .rectangle(230, 320, 340, 400, 0x121a26, 1)
+      .setStrokeStyle(1, 0x3a4558);
+    const detailBg = this.add
+      .rectangle(560, 300, 280, 360, 0x162030, 1)
+      .setStrokeStyle(1, 0x5a6480);
+    const detailTitle = this.add.text(430, 130, 'ITEM DETAILS', {
       fontFamily: UI.font,
-      fontSize: '14px',
-      color: UI.color.cream,
-    });
-    const gold = this.add.text(200, 122, `Gold: ${Registry.get().gold}`, {
-      fontFamily: UI.font,
-      fontSize: UI.small,
+      fontSize: UI.tiny,
       color: UI.color.accent,
     });
-    this.overlay.add([panel, title, gold]);
+    this.shopDetail = this.add.text(430, 155, 'Hover or select an item.', {
+      fontFamily: UI.font,
+      fontSize: UI.body,
+      color: UI.color.body,
+      wordWrap: { width: 250 },
+      lineSpacing: 5,
+    });
+
+    this.overlay.add([panel, headerBar, title, gold, listBg, detailBg, detailTitle, this.shopDetail]);
+
+    const rows = this.shopStock.map((id) => {
+      const r = shopItemRows(id);
+      return { label: r.label, detail: r.detail };
+    });
 
     this.menu = new TextMenu(
       this,
-      210,
-      148,
-      [
-        ...this.shopStock.map((id) => {
-          const item = ITEMS[id];
-          const who =
-            item.classes && item.classes.length
-              ? ` [${item.classes.map((c) => c.slice(0, 3)).join('/')}]`
-              : '';
-          return { label: `${item.name} — ${item.price}g${who}` };
-        }),
-        { label: 'Leave' },
-      ],
+      70,
+      110,
+      [...rows, { label: 'Leave store', detail: 'Return to town' }],
       (index) => {
         if (index >= this.shopStock.length) {
           this.closeOverlay();
@@ -259,6 +445,59 @@ export class TownScene extends Phaser.Scene {
         }
         this.chooseBuyer(this.shopStock[index]);
       },
+      {
+        rows: true,
+        rowWidth: 320,
+        lineHeight: 42,
+        container: this.overlay,
+        style: {
+          fontFamily: UI.font,
+          fontSize: '13px',
+          color: UI.color.body,
+        },
+        onHighlight: (index) => this.refreshShopDetail(index),
+      },
+    );
+    this.refreshShopDetail(0);
+  }
+
+  private refreshShopDetail(index: number): void {
+    if (!this.shopDetail) return;
+    if (index >= this.shopStock.length) {
+      this.shopDetail.setText('Leave the store and return to wandering town.');
+      return;
+    }
+    const id = this.shopStock[index];
+    const item = ITEMS[id];
+    if (!item) return;
+    const who =
+      item.classes && item.classes.length
+        ? item.classes.map((c) => c.charAt(0).toUpperCase() + c.slice(1)).join(', ')
+        : 'Anyone';
+    const bits = shopBonusBits(id);
+    const party = Registry.get().party;
+    const fit = party.filter((h) => canEquip(id, h.classId)).map((h) => h.name);
+    const fitLine =
+      item.kind === 'weapon' || item.kind === 'armor'
+        ? fit.length
+          ? `Fits: ${fit.join(', ')}`
+          : 'No one in party can use this.'
+        : 'Goes into a bag (battle use).';
+    this.shopDetail.setText(
+      [
+        item.name,
+        `${item.price} gold`,
+        '',
+        item.description,
+        bits ? `Bonuses: ${bits}` : '',
+        `Classes: ${who}`,
+        '',
+        fitLine,
+        '',
+        'Click / Enter to buy',
+      ]
+        .filter((l) => l !== undefined)
+        .join('\n'),
     );
   }
 
@@ -285,25 +524,54 @@ export class TownScene extends Phaser.Scene {
     this.overlay.removeAll(true);
     this.menu?.destroy();
 
-    const panel = this.add.rectangle(400, 250, 420, 280, 0x111820, 0.96).setStrokeStyle(2, 0xc2a35a);
-    const title = this.add.text(230, 130, `Give ${item.name} to…`, {
-      fontFamily: UI.font,
-      fontSize: '14px',
-      color: UI.color.cream,
-    });
-    this.overlay.add([panel, title]);
+    const panel = this.add
+      .rectangle(400, 300, 620, 420, 0x0e141c, 0.98)
+      .setStrokeStyle(2, 0xc2a35a);
+    const title = this.add
+      .text(400, 110, `Buy ${item.name}`, {
+        fontFamily: UI.font,
+        fontSize: '18px',
+        color: UI.color.cream,
+      })
+      .setOrigin(0.5);
+    const preview = this.add
+      .text(400, 140, `${item.description}\nClick a character to give the item.`, {
+        fontFamily: UI.font,
+        fontSize: UI.small,
+        color: UI.color.muted,
+        align: 'center',
+        wordWrap: { width: 520 },
+      })
+      .setOrigin(0.5, 0);
+    this.overlay.add([panel, title, preview]);
 
     this.menu = new TextMenu(
       this,
-      240,
-      170,
-      [...candidates.map((h) => ({ label: h.name })), { label: 'Back' }],
+      140,
+      190,
+      [
+        ...candidates.map((h) => {
+          const cmp =
+            item.kind === 'weapon' || item.kind === 'armor'
+              ? equipPreview(h, itemId)
+              : 'Goes in bag';
+          return { label: h.name, detail: cmp };
+        }),
+        { label: 'Back', detail: 'Return to stock list' },
+      ],
       (index) => {
         if (index >= candidates.length) {
           this.showShopList();
           return;
         }
         this.buyFor(candidates[index]);
+      },
+      {
+        rows: true,
+        rowWidth: 520,
+        lineHeight: 48,
+        container: this.overlay,
+        style: { fontFamily: UI.font, fontSize: '14px', color: UI.color.body },
       },
     );
   }
@@ -323,12 +591,11 @@ export class TownScene extends Phaser.Scene {
 
     let note = `Bought ${item.name} for ${hero.name}.`;
     if (item.kind === 'weapon' || item.kind === 'armor') {
-      // Auto-equip if that slot is empty
       const slot = item.kind === 'weapon' ? 'weapon' : 'armor';
       if (!hero.equipment[slot]) {
         note = equipItem(hero, itemId);
       } else {
-        note += ' (in bag — equip from Menu → Inventory)';
+        note += ' (in bag — press I to equip)';
       }
     }
 
@@ -340,13 +607,14 @@ export class TownScene extends Phaser.Scene {
 
   private openGameMenu(): void {
     if (this.mode !== 'explore') return;
+    Audio.sfx('confirm');
     this.mode = 'menu';
     this.overlay.removeAll(true);
     this.overlay.setVisible(true);
     this.menu?.destroy();
 
-    const panel = this.add.rectangle(400, 250, 380, 260, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
-    const title = this.add.text(250, 140, 'Party Menu', {
+    const panel = this.add.rectangle(400, 250, 380, 280, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
+    const title = this.add.text(250, 130, 'Party Menu', {
       fontFamily: UI.font,
       fontSize: '16px',
       color: UI.color.cream,
@@ -356,18 +624,38 @@ export class TownScene extends Phaser.Scene {
     this.menu = new TextMenu(
       this,
       260,
-      180,
-      [{ label: 'Inventory' }, { label: 'Status' }, { label: 'Save Game' }, { label: 'Close' }],
+      160,
+      [
+        { label: 'Inventory' },
+        { label: 'Formation' },
+        { label: 'Recruit' },
+        { label: 'Quest Log' },
+        { label: 'Status' },
+        { label: 'Save Game' },
+        { label: 'Close' },
+      ],
       (_i, item) => {
-        if (item.label === 'Inventory') this.openInventoryPicker();
-        else if (item.label === 'Status') {
+        if (item.label === 'Inventory') {
+          this.closeOverlay();
+          this.toggleInventory();
+        } else if (item.label === 'Formation') this.openFormation();
+        else if (item.label === 'Recruit') this.openRecruit();
+        else if (item.label === 'Quest Log') {
+          this.questLog.refresh();
+          this.closeOverlay();
+          const q = activeQuestText(Registry.get());
+          this.showDialog(`${q.title}\n${q.body}`);
+        } else if (item.label === 'Status') {
           const s = Registry.get();
-          const lines = s.party
-            .map(
+          const lines = [
+            ...s.party.map(
               (h) =>
-                `${h.name} Lv${h.level}  HP ${h.currentHp}/${h.stats.hp}  MP ${h.currentMp}/${h.stats.mp}`,
-            )
-            .join('\n');
+                `● ${h.name} Lv${h.level}  HP ${h.currentHp}/${h.stats.hp}  ATK ${h.stats.atk} DEF ${h.stats.def}`,
+            ),
+            ...(s.reserve.length
+              ? ['— Reserve —', ...s.reserve.map((h) => `○ ${h.name} Lv${h.level}`)]
+              : []),
+          ].join('\n');
           this.closeOverlay();
           this.showDialog(lines);
         } else if (item.label === 'Save Game') {
@@ -381,74 +669,115 @@ export class TownScene extends Phaser.Scene {
     );
   }
 
-  private openInventoryPicker(): void {
-    const party = Registry.get().party;
+  private openRecruit(): void {
+    const state = Registry.get();
+    const missing = missingClassIds(state);
     this.overlay.removeAll(true);
     this.menu?.destroy();
-    const panel = this.add.rectangle(400, 250, 400, 280, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
-    const title = this.add.text(240, 130, 'Whose inventory?', {
+    const panel = this.add.rectangle(400, 260, 460, 300, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
+    const title = this.add.text(200, 130, 'Hall of Traditions — Recruit', {
+      fontFamily: UI.font,
+      fontSize: '14px',
+      color: UI.color.cream,
+    });
+    const hint = this.add.text(200, 152, 'Unused classes join your reserve.', {
+      fontFamily: UI.font,
+      fontSize: UI.tiny,
+      color: UI.color.muted,
+    });
+    this.overlay.add([panel, title, hint]);
+    if (!missing.length) {
+      this.menu = new TextMenu(this, 220, 190, [{ label: 'All seven walk with you.' }, { label: 'Back' }], () =>
+        this.openGameMenu(),
+      );
+      return;
+    }
+    this.menu = new TextMenu(
+      this,
+      220,
+      190,
+      [...missing.map((id) => ({ label: `Recruit ${getClass(id).name}` })), { label: 'Back' }],
+      (index) => {
+        if (index >= missing.length) {
+          this.openGameMenu();
+          return;
+        }
+        const msg = recruitClass(state, missing[index]);
+        saveGame(state);
+        this.closeOverlay();
+        this.showDialog(msg);
+      },
+    );
+  }
+
+  private openFormation(): void {
+    const state = Registry.get();
+    this.overlay.removeAll(true);
+    this.menu?.destroy();
+    if (!state.reserve.length) {
+      const panel = this.add.rectangle(400, 240, 400, 200, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
+      const title = this.add.text(230, 160, 'No reserve members yet. Recruit first.', {
+        fontFamily: UI.font,
+        fontSize: UI.small,
+        color: UI.color.body,
+        wordWrap: { width: 340 },
+      });
+      this.overlay.add([panel, title]);
+      this.menu = new TextMenu(this, 260, 220, [{ label: 'Back' }], () => this.openGameMenu());
+      return;
+    }
+
+    const panel = this.add.rectangle(400, 270, 480, 340, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
+    const title = this.add.text(200, 120, 'Swap who leaves the active four:', {
       fontFamily: UI.font,
       fontSize: '14px',
       color: UI.color.cream,
     });
     this.overlay.add([panel, title]);
-
     this.menu = new TextMenu(
       this,
-      250,
-      170,
-      [...party.map((h) => ({ label: h.name })), { label: 'Back' }],
-      (index) => {
-        if (index >= party.length) {
+      220,
+      160,
+      [...state.party.map((h) => ({ label: `Replace ${h.name}` })), { label: 'Back' }],
+      (partyIndex) => {
+        if (partyIndex >= state.party.length) {
           this.openGameMenu();
           return;
         }
-        this.invHeroIndex = index;
-        this.openHeroInventory();
+        this.pickReserveSwap(partyIndex);
       },
     );
   }
 
-  private openHeroInventory(): void {
-    const hero = Registry.get().party[this.invHeroIndex];
-    hero.inventory = pruneEmpty(hero.inventory);
+  private pickReserveSwap(partyIndex: number): void {
+    const state = Registry.get();
     this.overlay.removeAll(true);
     this.menu?.destroy();
-
-    const panel = this.add.rectangle(400, 270, 500, 360, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
-    const title = this.add.text(180, 110, `${hero.name}'s Inventory`, {
+    const panel = this.add.rectangle(400, 270, 480, 340, 0x111820, 0.96).setStrokeStyle(2, 0x8a93a8);
+    const title = this.add.text(200, 120, `Bring in which reserve for ${state.party[partyIndex].name}?`, {
       fontFamily: UI.font,
-      fontSize: '14px',
+      fontSize: '13px',
       color: UI.color.cream,
+      wordWrap: { width: 420 },
     });
-    const summary = this.add.text(180, 132, formatBag(hero), {
-      fontFamily: UI.font,
-      fontSize: UI.tiny,
-      color: UI.color.body,
-      lineSpacing: 2,
-    });
-    this.overlay.add([panel, title, summary]);
-
-    const equipables = hero.inventory.filter((i) => {
-      const def = ITEMS[i.id];
-      return def && (def.kind === 'weapon' || def.kind === 'armor') && canEquip(i.id, hero.classId);
-    });
-
+    this.overlay.add([panel, title]);
     this.menu = new TextMenu(
       this,
-      190,
       220,
-      [
-        ...equipables.map((i) => ({ label: `Equip ${ITEMS[i.id].name}` })),
-        { label: 'Back' },
-      ],
-      (index) => {
-        if (index >= equipables.length) {
-          this.openInventoryPicker();
+      170,
+      [...state.reserve.map((h) => ({ label: h.name })), { label: 'Back' }],
+      (reserveIndex) => {
+        if (reserveIndex >= state.reserve.length) {
+          this.openFormation();
           return;
         }
-        const msg = equipItem(hero, equipables[index].id);
-        saveGame(Registry.get());
+        const msg = swapWithReserve(state, partyIndex, reserveIndex);
+        saveGame(state);
+        // Refresh overworld sprite if lead changed
+        const lead = state.party[0];
+        if (lead?.classId) {
+          this.player.setTexture(`char_${lead.classId}`);
+        }
         this.closeOverlay();
         this.showDialog(msg);
       },
@@ -461,7 +790,7 @@ export class TownScene extends Phaser.Scene {
     this.overlay.removeAll(true);
     this.overlay.setVisible(false);
     this.pendingBuyId = null;
-    if (this.mode !== 'dialog') this.mode = 'explore';
+    if (this.mode !== 'dialog' && this.mode !== 'inventory') this.mode = 'explore';
   }
 
   private refreshHud(): void {
@@ -470,5 +799,13 @@ export class TownScene extends Phaser.Scene {
       `Gold ${s.gold}   ` +
         s.party.map((h) => `${h.name} ${h.currentHp}/${h.stats.hp}`).join('  |  '),
     );
+    const tile = TOWN_MAP[this.ty]?.[this.tx] ?? 0;
+    let district = 'Village Paths';
+    if (this.tx <= 11 || tile === 8) district = 'Market District';
+    if (this.tx >= 14 || tile === 9) district = 'Temple Green';
+    if (this.ty >= 13) district = 'Cave Road';
+    if (tile === 10 || (this.tx >= 18 && this.ty >= 13)) district = 'Ruins Approach';
+    this.districtText.setText(district);
+    this.questLog.refresh();
   }
 }

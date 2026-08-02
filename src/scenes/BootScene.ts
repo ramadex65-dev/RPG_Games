@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { generateBuildingTextures } from '../assets/buildings';
 import { generateCharacterTextures } from '../assets/characters';
+import { generateNpcTextures } from '../assets/npcs';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -16,6 +17,7 @@ export class BootScene extends Phaser.Scene {
 
     generateCharacterTextures(this);
     generateBuildingTextures(this);
+    generateNpcTextures(this);
     this.scene.start('Title');
   }
 }

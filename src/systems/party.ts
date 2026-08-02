@@ -1,6 +1,6 @@
-import { getClass } from '../data/classes';
+import { CLASSES, getClass } from '../data/classes';
 import { SKILLS } from '../data/skills';
-import type { ClassId, Combatant, Stats } from '../data/types';
+import type { ClassId, Combatant, GameState, Stats } from '../data/types';
 import { addItem, applyEquipBonuses } from './inventory';
 
 function scaleStats(base: Stats, growth: Stats, level: number): Stats {
@@ -22,7 +22,7 @@ export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
   const stats = scaleStats(cls.base, cls.growth, level);
   const skills = cls.skills.filter((id) => SKILLS[id].learnLevel <= level);
   const hero: Combatant = {
-    id: `hero_${classId}_${slot}`,
+    id: `hero_${classId}_${slot}_${Math.random().toString(36).slice(2, 7)}`,
     name: cls.name,
     isPlayer: true,
     classId,
@@ -95,4 +95,32 @@ export function effectiveStats(c: Combatant): Stats {
     if (st.id === 'hide') s.agi = Math.floor(s.agi * 1.4);
   }
   return s;
+}
+
+export function ownedClassIds(state: GameState): ClassId[] {
+  return [...state.party, ...state.reserve]
+    .map((h) => h.classId)
+    .filter((id): id is ClassId => !!id);
+}
+
+export function missingClassIds(state: GameState): ClassId[] {
+  const owned = new Set(ownedClassIds(state));
+  return CLASSES.map((c) => c.id).filter((id) => !owned.has(id));
+}
+
+export function recruitClass(state: GameState, classId: ClassId): string {
+  if (ownedClassIds(state).includes(classId)) return `${getClass(classId).name} already walks with you.`;
+  const hero = createHero(classId, Math.max(1, state.party[0]?.level ?? 1), state.reserve.length + 4);
+  state.reserve.push(hero);
+  return `${hero.name} joins your circle! (In reserve — use Formation to swap into the active four.)`;
+}
+
+export function swapWithReserve(state: GameState, partyIndex: number, reserveIndex: number): string {
+  if (partyIndex < 0 || partyIndex >= state.party.length) return 'Invalid party slot.';
+  if (reserveIndex < 0 || reserveIndex >= state.reserve.length) return 'Invalid reserve slot.';
+  const a = state.party[partyIndex];
+  const b = state.reserve[reserveIndex];
+  state.party[partyIndex] = b;
+  state.reserve[reserveIndex] = a;
+  return `Formation: ${b.name} enters. ${a.name} waits in reserve.`;
 }

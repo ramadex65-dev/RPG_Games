@@ -65,6 +65,8 @@ export interface EnemyDef {
   skills: string[];
   isBoss?: boolean;
   undead?: boolean;
+  weak?: Element[];
+  resist?: Element[];
 }
 
 export interface ItemDef {
@@ -80,7 +82,6 @@ export interface ItemDef {
   matBonus?: number;
   mdfBonus?: number;
   agiBonus?: number;
-  /** Empty / omitted = any class. */
   classes?: ClassId[];
 }
 
@@ -100,6 +101,11 @@ export interface Combatant {
   undead?: boolean;
   equipment: { weapon?: string; armor?: string };
   inventory: InventoryItem[];
+  /** Enemy affinity mirror for combatants spawned from defs */
+  weak?: Element[];
+  resist?: Element[];
+  /** Boss phase tracking */
+  phase2?: boolean;
 }
 
 export interface InventoryItem {
@@ -107,14 +113,19 @@ export interface InventoryItem {
   qty: number;
 }
 
+export type LocationId = 'town' | 'dungeon' | 'ruins';
+
 export interface GameState {
   party: Combatant[];
+  /** Recruited heroes not in the active four */
+  reserve: Combatant[];
   gold: number;
-  /** @deprecated kept for save migration only */
   inventory?: InventoryItem[];
   flags: Record<string, boolean>;
-  location: 'town' | 'dungeon';
+  chests: Record<string, boolean>;
+  location: LocationId;
   playerX: number;
   playerY: number;
   dungeonCleared: boolean;
+  ruinsCleared: boolean;
 }

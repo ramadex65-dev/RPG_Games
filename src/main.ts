@@ -4,8 +4,10 @@ import { TitleScene } from './scenes/TitleScene';
 import { PartySelectScene } from './scenes/PartySelectScene';
 import { TownScene } from './scenes/TownScene';
 import { DungeonScene } from './scenes/DungeonScene';
+import { RuinsScene } from './scenes/RuinsScene';
 import { BattleScene } from './scenes/BattleScene';
 import { GameOverScene } from './scenes/GameOverScene';
+import { VictoryScene } from './scenes/VictoryScene';
 
 new Phaser.Game({
   type: Phaser.AUTO,
@@ -19,8 +21,10 @@ new Phaser.Game({
     PartySelectScene,
     TownScene,
     DungeonScene,
+    RuinsScene,
     BattleScene,
     GameOverScene,
+    VictoryScene,
   ],
   scale: {
     mode: Phaser.Scale.FIT,

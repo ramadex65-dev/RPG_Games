@@ -234,6 +234,9 @@ export function generateCharacterTextures(scene: Phaser.Scene): void {
     bat: (gg) => drawBat(gg, 0x6a5a7a),
     skeleton: (gg) => drawSkeleton(gg, 0xd9d2c5),
     shade: (gg) => drawShade(gg, 0x3a2f4a),
+    ruin_wisp: (gg) => drawShade(gg, 0x7ec8e3),
+    stone_guard: (gg) => drawSkeleton(gg, 0x8a8a84),
+    echo_knight: (gg) => drawHumanoid(gg, 0x5b6ee1, { helm: true, weapon: 'sword', cape: true }),
     ley_wraith: (gg) => drawWraith(gg, 0x8b4dff),
   };
 
