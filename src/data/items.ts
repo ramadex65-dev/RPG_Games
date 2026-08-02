@@ -175,6 +175,43 @@ export const ITEMS: Record<string, ItemDef> = {
     mdfBonus: 5,
     classes: ['druid'],
   },
+
+  // Sellable dungeon treasure
+  rough_gem: {
+    id: 'rough_gem',
+    name: 'Rough Gem',
+    description: 'Uncut stone. Merchants pay modestly.',
+    kind: 'treasure',
+    price: 36,
+  },
+  ancient_coin: {
+    id: 'ancient_coin',
+    name: 'Ancient Coin',
+    description: 'Strange minting from a lost age.',
+    kind: 'treasure',
+    price: 48,
+  },
+  silver_band: {
+    id: 'silver_band',
+    name: 'Silver Band',
+    description: 'Plain ring of decent silver.',
+    kind: 'treasure',
+    price: 64,
+  },
+  relic_shard: {
+    id: 'relic_shard',
+    name: 'Relic Shard',
+    description: 'Fragment of a broken holy relic.',
+    kind: 'treasure',
+    price: 90,
+  },
+  ornate_idol: {
+    id: 'ornate_idol',
+    name: 'Ornate Idol',
+    description: 'Collectors in town will pay well.',
+    kind: 'treasure',
+    price: 130,
+  },
 };
 
 /** Shared consumables always in the shop. */

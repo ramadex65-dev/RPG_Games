@@ -73,7 +73,7 @@ export interface ItemDef {
   id: string;
   name: string;
   description: string;
-  kind: 'consumable' | 'weapon' | 'armor';
+  kind: 'consumable' | 'weapon' | 'armor' | 'treasure';
   price: number;
   healHp?: number;
   healMp?: number;
@@ -83,6 +83,25 @@ export interface ItemDef {
   mdfBonus?: number;
   agiBonus?: number;
   classes?: ClassId[];
+}
+
+export interface FloorChest {
+  id: string;
+  x: number;
+  y: number;
+  opened: boolean;
+  gold: number;
+  itemId?: string;
+  itemQty?: number;
+}
+
+export interface GeneratedFloor {
+  kind: 'dungeon' | 'ruins';
+  seed: number;
+  map: number[][];
+  entrance: { x: number; y: number };
+  boss: { x: number; y: number };
+  chests: FloorChest[];
 }
 
 export interface Combatant {
@@ -122,7 +141,12 @@ export interface GameState {
   gold: number;
   inventory?: InventoryItem[];
   flags: Record<string, boolean>;
+  /** Legacy opened-chest flags (migrated runs may still use these) */
   chests: Record<string, boolean>;
+  /** Active procedural cave layout for this delve */
+  caveFloor?: GeneratedFloor;
+  /** Active procedural ruins layout for this delve */
+  ruinsFloor?: GeneratedFloor;
   location: LocationId;
   playerX: number;
   playerY: number;

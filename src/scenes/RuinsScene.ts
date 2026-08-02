@@ -1,18 +1,26 @@
 import Phaser from 'phaser';
 import { classTextureKey } from '../assets/characters';
 import { RUINS_ENCOUNTERS } from '../data/enemies';
-import type { ClassId } from '../data/types';
+import type { ClassId, GeneratedFloor } from '../data/types';
 import { Audio } from '../systems/audio';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
 import { chestAt, openChest } from '../world/explore';
-import { isBlocked, mapPixelSize, RUINS_MAP, TILE, tileColor } from '../world/maps';
+import { generateFloor } from '../world/generate';
+import { isBlocked, mapPixelSize, TILE, tileColor } from '../world/maps';
 import { InventoryScreen } from '../ui/InventoryScreen';
 import { QuestLog } from '../ui/QuestLog';
 import { UI } from '../ui/theme';
 
+function partyLevel(): number {
+  const party = Registry.get().party;
+  if (!party.length) return 1;
+  return Math.max(1, Math.round(party.reduce((s, h) => s + h.level, 0) / party.length));
+}
+
 export class RuinsScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Image;
+  private floor!: GeneratedFloor;
   private tx = 1;
   private ty = 1;
   private hud!: Phaser.GameObjects.Text;
@@ -33,19 +41,33 @@ export class RuinsScene extends Phaser.Scene {
     Audio.unlock();
     Audio.playMusic('dungeon');
     const state = Registry.get();
-    this.tx = state.location === 'ruins' ? state.playerX : 1;
-    this.ty = state.location === 'ruins' ? state.playerY : 1;
-    this.tx = Phaser.Math.Clamp(this.tx, 1, RUINS_MAP[0].length - 2);
-    this.ty = Phaser.Math.Clamp(this.ty, 1, RUINS_MAP.length - 2);
-    state.location = 'ruins';
+    if (!state.ruinsFloor) {
+      state.ruinsFloor = generateFloor('ruins', partyLevel());
+      state.playerX = state.ruinsFloor.entrance.x;
+      state.playerY = state.ruinsFloor.entrance.y;
+    }
+    this.floor = state.ruinsFloor;
+    const map = this.floor.map;
 
-    const { w, h } = mapPixelSize(RUINS_MAP);
+    this.tx = state.location === 'ruins' ? state.playerX : this.floor.entrance.x;
+    this.ty = state.location === 'ruins' ? state.playerY : this.floor.entrance.y;
+    this.tx = Phaser.Math.Clamp(this.tx, 1, map[0].length - 2);
+    this.ty = Phaser.Math.Clamp(this.ty, 1, map.length - 2);
+    if (isBlocked(map, this.tx, this.ty)) {
+      this.tx = this.floor.entrance.x;
+      this.ty = this.floor.entrance.y;
+    }
+    state.location = 'ruins';
+    state.playerX = this.tx;
+    state.playerY = this.ty;
+
+    const { w, h } = mapPixelSize(map);
     this.cameras.main.setBounds(0, 0, w, h);
     this.add.rectangle(w / 2, h / 2, w, h, 0x181820);
 
-    for (let y = 0; y < RUINS_MAP.length; y++) {
-      for (let x = 0; x < RUINS_MAP[0].length; x++) {
-        const tile = RUINS_MAP[y][x];
+    for (let y = 0; y < map.length; y++) {
+      for (let x = 0; x < map[0].length; x++) {
+        const tile = map[y][x];
         let color = tileColor(tile, false);
         if (tile === 2) color = 0x5a7a5a;
         if (tile === 6) color = 0x5b6ee1;
@@ -56,7 +78,7 @@ export class RuinsScene extends Phaser.Scene {
     this.refreshChests();
 
     this.add
-      .text(1 * TILE + TILE / 2, 13 * TILE + TILE / 2, 'ECHO', {
+      .text(this.floor.boss.x * TILE + TILE / 2, this.floor.boss.y * TILE + TILE / 2, 'ECHO', {
         fontFamily: UI.font,
         fontSize: UI.tiny,
         color: '#9cf',
@@ -97,7 +119,7 @@ export class RuinsScene extends Phaser.Scene {
       .setVisible(false);
 
     this.add
-      .text(12, this.scale.height - 22, 'Ruins  •  Blue = Echo Knight  •  Chests (E)  •  I inventory  •  N mute', {
+      .text(12, this.scale.height - 22, 'Ruins  •  Blue = Echo Knight  •  Chests (E)  •  I inventory  •  Layout random each entry', {
         fontFamily: UI.font,
         fontSize: UI.tiny,
         color: UI.color.muted,
@@ -129,6 +151,7 @@ export class RuinsScene extends Phaser.Scene {
       this.toast(Audio.toggleMute() ? 'Audio muted.' : 'Audio on.');
     });
 
+    saveGame(state);
     this.refreshHud();
   }
 
@@ -164,11 +187,8 @@ export class RuinsScene extends Phaser.Scene {
     this.chestMarks.forEach((m) => m.destroy());
     this.chestMarks = [];
     const state = Registry.get();
-    for (const c of [
-      { x: 15, y: 3, id: 'ruins_alcove' },
-      { x: 8, y: 9, id: 'ruins_hall' },
-    ]) {
-      if (state.chests[c.id]) continue;
+    for (const c of this.floor.chests) {
+      if (c.opened || state.chests[c.id]) continue;
       this.chestMarks.push(
         this.add.rectangle(c.x * TILE + TILE / 2, c.y * TILE + TILE / 2, 14, 12, 0xd4a017).setDepth(3),
       );
@@ -176,9 +196,10 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   private tryMove(dx: number, dy: number): void {
+    const map = this.floor.map;
     const nx = this.tx + dx;
     const ny = this.ty + dy;
-    if (isBlocked(RUINS_MAP, nx, ny)) return;
+    if (isBlocked(map, nx, ny)) return;
     this.tx = nx;
     this.ty = ny;
     this.player.setPosition(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2);
@@ -188,11 +209,12 @@ export class RuinsScene extends Phaser.Scene {
     state.playerX = this.tx;
     state.playerY = this.ty;
 
-    const tile = RUINS_MAP[this.ty][this.tx];
+    const tile = map[this.ty][this.tx];
     if (tile === 2) {
       state.location = 'town';
       state.playerX = 20;
       state.playerY = 14;
+      state.ruinsFloor = undefined;
       saveGame(state);
       this.scene.start('Town');
       return;
@@ -221,7 +243,7 @@ export class RuinsScene extends Phaser.Scene {
 
   private interact(): void {
     const state = Registry.get();
-    const chest = chestAt('ruins', this.tx, this.ty);
+    const chest = chestAt(state, 'ruins', this.tx, this.ty);
     if (chest) {
       const msg = openChest(state, chest);
       Audio.sfx('confirm');
@@ -247,8 +269,9 @@ export class RuinsScene extends Phaser.Scene {
 
   private refreshHud(): void {
     const s = Registry.get();
+    const open = this.floor.chests.filter((c) => !c.opened && !s.chests[c.id]).length;
     this.hud.setText(
-      `Ruins   Gold ${s.gold}   ` +
+      `Ruins (seed ${this.floor.seed.toString(16).slice(0, 4)})  Chests ${open}  Gold ${s.gold}   ` +
         s.party.map((h) => `${h.name} ${h.currentHp}/${h.stats.hp}`).join('  |  '),
     );
     this.questLog.refresh();

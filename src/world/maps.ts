@@ -48,6 +48,7 @@ export const TOWN_MAP: number[][] = [
   row('########################'),
 ];
 
+/** Fallback templates — live delves use procedurally generated floors. */
 export const DUNGEON_MAP: number[][] = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1],
@@ -66,7 +67,6 @@ export const DUNGEON_MAP: number[][] = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
-/** Ruins of Echoes — second dungeon */
 export const RUINS_MAP: number[][] = [
   [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   [1, 2, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1],
@@ -86,22 +86,6 @@ export const RUINS_MAP: number[][] = [
 ];
 
 export const TILE = 40;
-
-export interface ChestDef {
-  id: string;
-  map: 'dungeon' | 'ruins';
-  x: number;
-  y: number;
-  gold: number;
-  itemId?: string;
-}
-
-export const CHESTS: ChestDef[] = [
-  { id: 'cave_cache', map: 'dungeon', x: 3, y: 5, gold: 40, itemId: 'hi_potion' },
-  { id: 'cave_side', map: 'dungeon', x: 14, y: 7, gold: 25, itemId: 'ether' },
-  { id: 'ruins_alcove', map: 'ruins', x: 15, y: 3, gold: 55, itemId: 'hi_potion' },
-  { id: 'ruins_hall', map: 'ruins', x: 8, y: 9, gold: 35 },
-];
 
 export function mapPixelSize(map: number[][]): { w: number; h: number } {
   return { w: map[0].length * TILE, h: map.length * TILE };

@@ -1,25 +1,34 @@
 import Phaser from 'phaser';
 import { classTextureKey } from '../assets/characters';
 import { CAVE_ENCOUNTERS } from '../data/enemies';
-import type { ClassId } from '../data/types';
+import type { ClassId, GeneratedFloor } from '../data/types';
 import { Audio } from '../systems/audio';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
 import { chestAt, openChest } from '../world/explore';
-import { DUNGEON_MAP, isBlocked, mapPixelSize, TILE, tileColor } from '../world/maps';
+import { generateFloor } from '../world/generate';
+import { isBlocked, mapPixelSize, TILE, tileColor } from '../world/maps';
 import { InventoryScreen } from '../ui/InventoryScreen';
 import { QuestLog } from '../ui/QuestLog';
 import { UI } from '../ui/theme';
 
+function partyLevel(): number {
+  const party = Registry.get().party;
+  if (!party.length) return 1;
+  return Math.max(1, Math.round(party.reduce((s, h) => s + h.level, 0) / party.length));
+}
+
 export class DungeonScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Image;
-  private tx = 20;
+  private floor!: GeneratedFloor;
+  private tx = 1;
   private ty = 1;
   private hud!: Phaser.GameObjects.Text;
   private dialog!: Phaser.GameObjects.Text;
   private questLog!: QuestLog;
   private inventoryUi: InventoryScreen | null = null;
   private chestMarks: Phaser.GameObjects.Rectangle[] = [];
+  private bossLabel!: Phaser.GameObjects.Text;
   private moveCooldown = 0;
   private stepsSinceFight = 0;
   private blocked = false;
@@ -43,19 +52,34 @@ export class DungeonScene extends Phaser.Scene {
     Audio.playMusic('dungeon');
 
     const state = Registry.get();
-    this.tx = state.location === 'dungeon' ? state.playerX : 20;
-    this.ty = state.location === 'dungeon' ? state.playerY : 1;
-    this.tx = Phaser.Math.Clamp(this.tx, 1, DUNGEON_MAP[0].length - 2);
-    this.ty = Phaser.Math.Clamp(this.ty, 1, DUNGEON_MAP.length - 2);
-    state.location = 'dungeon';
+    // Keep layout across battles; regenerate when missing (fresh town entry).
+    if (!state.caveFloor) {
+      state.caveFloor = generateFloor('dungeon', partyLevel());
+      state.playerX = state.caveFloor.entrance.x;
+      state.playerY = state.caveFloor.entrance.y;
+    }
+    this.floor = state.caveFloor;
+    const map = this.floor.map;
 
-    const { w, h } = mapPixelSize(DUNGEON_MAP);
+    this.tx = state.location === 'dungeon' ? state.playerX : this.floor.entrance.x;
+    this.ty = state.location === 'dungeon' ? state.playerY : this.floor.entrance.y;
+    this.tx = Phaser.Math.Clamp(this.tx, 1, map[0].length - 2);
+    this.ty = Phaser.Math.Clamp(this.ty, 1, map.length - 2);
+    if (isBlocked(map, this.tx, this.ty)) {
+      this.tx = this.floor.entrance.x;
+      this.ty = this.floor.entrance.y;
+    }
+    state.location = 'dungeon';
+    state.playerX = this.tx;
+    state.playerY = this.ty;
+
+    const { w, h } = mapPixelSize(map);
     this.cameras.main.setBounds(0, 0, w, h);
     this.add.rectangle(w / 2, h / 2, w, h, 0x141018);
 
-    for (let y = 0; y < DUNGEON_MAP.length; y++) {
-      for (let x = 0; x < DUNGEON_MAP[0].length; x++) {
-        const tile = DUNGEON_MAP[y][x];
+    for (let y = 0; y < map.length; y++) {
+      for (let x = 0; x < map[0].length; x++) {
+        const tile = map[y][x];
         let color = tileColor(tile, false);
         if (tile === 2) color = 0x4f7a4f;
         if (tile === 6) color = 0x8b4dff;
@@ -63,8 +87,8 @@ export class DungeonScene extends Phaser.Scene {
       }
     }
 
-    this.add
-      .text(1 * TILE + TILE / 2, 13 * TILE + TILE / 2, 'WRAITH', {
+    this.bossLabel = this.add
+      .text(this.floor.boss.x * TILE + TILE / 2, this.floor.boss.y * TILE + TILE / 2, 'WRAITH', {
         fontFamily: UI.font,
         fontSize: UI.tiny,
         color: '#d48cff',
@@ -109,13 +133,18 @@ export class DungeonScene extends Phaser.Scene {
       .setVisible(false);
 
     this.add
-      .text(12, this.scale.height - 22, 'Purple = Ley Wraith  •  Gold = chest (E)  •  I inventory  •  Green = town  •  N mute', {
-        fontFamily: UI.font,
-        fontSize: UI.tiny,
-        color: UI.color.muted,
-        backgroundColor: '#00000066',
-        padding: { x: 4, y: 2 },
-      })
+      .text(
+        12,
+        this.scale.height - 22,
+        'Purple = Ley Wraith  •  Gold = chest (E)  •  I inventory  •  Green = town  •  Layout random each entry',
+        {
+          fontFamily: UI.font,
+          fontSize: UI.tiny,
+          color: UI.color.muted,
+          backgroundColor: '#00000066',
+          padding: { x: 4, y: 2 },
+        },
+      )
       .setScrollFactor(0)
       .setDepth(40);
 
@@ -155,10 +184,15 @@ export class DungeonScene extends Phaser.Scene {
 
     if (!state.flags.tutorialShown) {
       state.flags.tutorialShown = true;
-      this.toast('Dark energy coils through these halls. Survive random battles and face the Ley Wraith.');
+      this.toast('These halls shift with each descent. Seek chests, then the Ley Wraith.');
     }
 
+    saveGame(state);
     this.refreshHud();
+  }
+
+  private map() {
+    return this.floor.map;
   }
 
   private toggleInventory(): void {
@@ -190,9 +224,10 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private tryMove(dx: number, dy: number): void {
+    const map = this.map();
     const nx = this.tx + dx;
     const ny = this.ty + dy;
-    if (isBlocked(DUNGEON_MAP, nx, ny)) return;
+    if (isBlocked(map, nx, ny)) return;
     this.tx = nx;
     this.ty = ny;
     this.player.setPosition(this.tx * TILE + TILE / 2, this.ty * TILE + TILE / 2);
@@ -202,11 +237,12 @@ export class DungeonScene extends Phaser.Scene {
     state.playerX = this.tx;
     state.playerY = this.ty;
 
-    const tile = DUNGEON_MAP[this.ty][this.tx];
+    const tile = map[this.ty][this.tx];
     if (tile === 2) {
       state.location = 'town';
       state.playerX = 12;
       state.playerY = 14;
+      state.caveFloor = undefined; // next entry reshuffles
       saveGame(state);
       this.scene.start('Town');
       return;
@@ -237,11 +273,8 @@ export class DungeonScene extends Phaser.Scene {
     this.chestMarks.forEach((m) => m.destroy());
     this.chestMarks = [];
     const state = Registry.get();
-    for (const c of [
-      { x: 3, y: 5, id: 'cave_cache' },
-      { x: 14, y: 7, id: 'cave_side' },
-    ]) {
-      if (state.chests[c.id]) continue;
+    for (const c of this.floor.chests) {
+      if (c.opened || state.chests[c.id]) continue;
       this.chestMarks.push(
         this.add.rectangle(c.x * TILE + TILE / 2, c.y * TILE + TILE / 2, 14, 12, 0xd4a017).setDepth(3),
       );
@@ -250,7 +283,7 @@ export class DungeonScene extends Phaser.Scene {
 
   private interact(): void {
     const state = Registry.get();
-    const chest = chestAt('dungeon', this.tx, this.ty);
+    const chest = chestAt(state, 'dungeon', this.tx, this.ty);
     if (chest) {
       const msg = openChest(state, chest);
       Audio.sfx('confirm');
@@ -270,10 +303,12 @@ export class DungeonScene extends Phaser.Scene {
 
   private refreshHud(): void {
     const s = Registry.get();
+    const open = this.floor.chests.filter((c) => !c.opened && !s.chests[c.id]).length;
     this.hud.setText(
-      `Dungeon   Gold ${s.gold}   ` +
+      `Dungeon (seed ${this.floor.seed.toString(16).slice(0, 4)})  Chests ${open}  Gold ${s.gold}   ` +
         s.party.map((h) => `${h.name} ${h.currentHp}/${h.stats.hp}`).join('  |  '),
     );
     this.questLog.refresh();
+    void this.bossLabel;
   }
 }

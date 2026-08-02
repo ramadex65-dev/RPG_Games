@@ -6,10 +6,12 @@ import { canEquip, ITEMS, shopStockForParty } from '../data/items';
 import { activeQuestText } from '../data/quests';
 import type { ClassId, Combatant } from '../data/types';
 import { Audio } from '../systems/audio';
-import { addItem, equipItem, equipPreview, shopBonusBits, shopItemRows } from '../systems/inventory';
+import { addItem, equipItem, equipPreview, pruneEmpty, removeItem, shopBonusBits, shopItemRows } from '../systems/inventory';
+import { isSellable, sellPrice } from '../systems/loot';
 import { missingClassIds, recruitClass, swapWithReserve } from '../systems/party';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
+import { generateFloor } from '../world/generate';
 import { isBlocked, mapPixelSize, TILE, tileColor, TOWN_MAP } from '../world/maps';
 import { InventoryScreen } from '../ui/InventoryScreen';
 import { TextMenu } from '../ui/menu';
@@ -353,12 +355,20 @@ export class TownScene extends Phaser.Scene {
     this.showDialog('Innkeeper: Rest well by the hearth. Your party is fully restored. (-15g)');
   }
 
+  private partyLevel(): number {
+    const party = Registry.get().party;
+    if (!party.length) return 1;
+    return Math.max(1, Math.round(party.reduce((s, h) => s + h.level, 0) / party.length));
+  }
+
   private enterDungeon(): void {
     const state = Registry.get();
     state.location = 'dungeon';
     state.flags.entered_cave = true;
-    state.playerX = 20;
-    state.playerY = 1;
+    // Fresh layout + loot every time you enter from town.
+    state.caveFloor = generateFloor('dungeon', this.partyLevel());
+    state.playerX = state.caveFloor.entrance.x;
+    state.playerY = state.caveFloor.entrance.y;
     saveGame(state);
     Audio.playMusic('dungeon');
     this.scene.start('Dungeon');
@@ -367,8 +377,9 @@ export class TownScene extends Phaser.Scene {
   private enterRuins(): void {
     const state = Registry.get();
     state.location = 'ruins';
-    state.playerX = 1;
-    state.playerY = 1;
+    state.ruinsFloor = generateFloor('ruins', this.partyLevel());
+    state.playerX = state.ruinsFloor.entrance.x;
+    state.playerY = state.ruinsFloor.entrance.y;
     saveGame(state);
     Audio.playMusic('dungeon');
     this.scene.start('Ruins');
@@ -378,9 +389,56 @@ export class TownScene extends Phaser.Scene {
     Audio.sfx('confirm');
     this.mode = 'shop';
     this.pendingBuyId = null;
-    const state = Registry.get();
-    this.shopStock = shopStockForParty(state.party.map((p) => p.classId as ClassId));
-    this.showShopList();
+    this.showShopHub();
+  }
+
+  private showShopHub(): void {
+    this.overlay.removeAll(true);
+    this.overlay.setVisible(true);
+    this.menu?.destroy();
+    const panel = this.add
+      .rectangle(400, 280, 420, 260, 0x0e141c, 0.98)
+      .setStrokeStyle(2, 0xc2a35a);
+    const title = this.add
+      .text(400, 180, 'GENERAL STORE', {
+        fontFamily: UI.font,
+        fontSize: '18px',
+        color: UI.color.cream,
+      })
+      .setOrigin(0.5);
+    const gold = this.add
+      .text(400, 208, `Your gold: ${Registry.get().gold}g`, {
+        fontFamily: UI.font,
+        fontSize: UI.small,
+        color: UI.color.accent,
+      })
+      .setOrigin(0.5);
+    this.overlay.add([panel, title, gold]);
+    this.menu = new TextMenu(
+      this,
+      220,
+      240,
+      [
+        { label: 'Buy', detail: 'Gear and supplies for your party' },
+        { label: 'Sell', detail: 'Trade loot and spare items for gold' },
+        { label: 'Leave', detail: 'Return to town' },
+      ],
+      (_i, item) => {
+        if (item.label === 'Buy') {
+          const state = Registry.get();
+          this.shopStock = shopStockForParty(state.party.map((p) => p.classId as ClassId));
+          this.showShopList();
+        } else if (item.label === 'Sell') this.showSellList();
+        else this.closeOverlay();
+      },
+      {
+        rows: true,
+        rowWidth: 320,
+        lineHeight: 44,
+        container: this.overlay,
+        style: { fontFamily: UI.font, fontSize: '14px', color: UI.color.body },
+      },
+    );
   }
 
   private showShopList(): void {
@@ -437,10 +495,10 @@ export class TownScene extends Phaser.Scene {
       this,
       70,
       110,
-      [...rows, { label: 'Leave store', detail: 'Return to town' }],
+        [...rows, { label: 'Back', detail: 'Return to Buy / Sell' }],
       (index) => {
         if (index >= this.shopStock.length) {
-          this.closeOverlay();
+          this.showShopHub();
           return;
         }
         this.chooseBuyer(this.shopStock[index]);
@@ -461,10 +519,101 @@ export class TownScene extends Phaser.Scene {
     this.refreshShopDetail(0);
   }
 
+  private collectSellables(): { ownerIndex: number; itemId: string; qty: number; label: string }[] {
+    const party = Registry.get().party;
+    const out: { ownerIndex: number; itemId: string; qty: number; label: string }[] = [];
+    party.forEach((h, ownerIndex) => {
+      h.inventory = pruneEmpty(h.inventory);
+      for (const stack of h.inventory) {
+        if (!isSellable(stack.id) || stack.qty <= 0) continue;
+        const def = ITEMS[stack.id];
+        if (!def) continue;
+        out.push({
+          ownerIndex,
+          itemId: stack.id,
+          qty: stack.qty,
+          label: `${def.name} x${stack.qty} (${h.name}) — ${sellPrice(stack.id)}g`,
+        });
+      }
+    });
+    return out;
+  }
+
+  private showSellList(): void {
+    this.overlay.removeAll(true);
+    this.menu?.destroy();
+    const sellables = this.collectSellables();
+    const panel = this.add
+      .rectangle(400, 300, 640, 460, 0x0e141c, 0.98)
+      .setStrokeStyle(2, 0xc2a35a);
+    const title = this.add
+      .text(400, 90, 'SELL LOOT', {
+        fontFamily: UI.font,
+        fontSize: '18px',
+        color: UI.color.cream,
+      })
+      .setOrigin(0.5);
+    const hint = this.add
+      .text(400, 118, `Merchant buys at half price. Gold: ${Registry.get().gold}g`, {
+        fontFamily: UI.font,
+        fontSize: UI.tiny,
+        color: UI.color.accent,
+      })
+      .setOrigin(0.5);
+    this.overlay.add([panel, title, hint]);
+
+    if (!sellables.length) {
+      this.menu = new TextMenu(
+        this,
+        240,
+        200,
+        [{ label: 'Nothing to sell', detail: 'Find treasure in the cave or ruins' }, { label: 'Back' }],
+        () => this.showShopHub(),
+        { rows: true, rowWidth: 320, lineHeight: 42, container: this.overlay },
+      );
+      return;
+    }
+
+    this.menu = new TextMenu(
+      this,
+      100,
+      150,
+      [...sellables.map((s) => ({ label: s.label, detail: `Sell one for ${sellPrice(s.itemId)}g` })), { label: 'Back', detail: 'Return to counter' }],
+      (index) => {
+        if (index >= sellables.length) {
+          this.showShopHub();
+          return;
+        }
+        const entry = sellables[index];
+        const state = Registry.get();
+        const hero = state.party[entry.ownerIndex];
+        if (!hero || !removeItem(hero.inventory, entry.itemId, 1)) {
+          this.showDialog('That item is gone.');
+          this.closeOverlay();
+          return;
+        }
+        hero.inventory = pruneEmpty(hero.inventory);
+        const payout = sellPrice(entry.itemId);
+        state.gold += payout;
+        saveGame(state);
+        this.refreshHud();
+        this.showDialog(`Sold ${ITEMS[entry.itemId]?.name ?? 'item'} for ${payout}g.`);
+        this.closeOverlay();
+      },
+      {
+        rows: true,
+        rowWidth: 560,
+        lineHeight: 40,
+        container: this.overlay,
+        style: { fontFamily: UI.font, fontSize: '13px', color: UI.color.body },
+      },
+    );
+  }
+
   private refreshShopDetail(index: number): void {
     if (!this.shopDetail) return;
     if (index >= this.shopStock.length) {
-      this.shopDetail.setText('Leave the store and return to wandering town.');
+      this.shopDetail.setText('Back to the store counter.');
       return;
     }
     const id = this.shopStock[index];

@@ -27,6 +27,8 @@ Open the URL Vite prints (default `http://localhost:5173`).
 - Procedural SFX + scene music (no external audio assets)
 - Battle polish: attack lunge, hit flash, animated HP bars, current-turn highlight
 - Front/Back formation from armor weight — melee prefers Front; magic hits randomly
+- Procedural cave/ruins layouts each entry; random chest loot (gold, gear, sellable treasure)
+- Store **Sell** counter for dungeon finds (half price)
 - Larger scrollable town (Market / Temple / Cave Road / Ruins) with NPCs
 - Quest log with chained objectives
 - Per-character inventory (**I**) with click-to-equip gear view + mouse-friendly class gear shop

@@ -67,6 +67,8 @@ function migrateState(parsed: Partial<GameState>): GameState {
     party,
     reserve,
     chests: parsed.chests ?? {},
+    caveFloor: parsed.caveFloor,
+    ruinsFloor: parsed.ruinsFloor,
     ruinsCleared: parsed.ruinsCleared ?? false,
     inventory: undefined,
   };
