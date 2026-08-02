@@ -5,6 +5,7 @@ import { ITEMS } from '../data/items';
 import { SKILLS } from '../data/skills';
 import type { ClassId, Combatant } from '../data/types';
 import { applySkill, enemyAi, strike, tickStates, type CombatLogLine } from '../systems/combat';
+import { addItem, listPartyConsumables, pruneEmpty, removeItem } from '../systems/inventory';
 import { grantXp } from '../systems/party';
 import { Registry } from '../systems/registry';
 import { saveGame } from '../systems/save';
@@ -27,6 +28,7 @@ export class BattleScene extends Phaser.Scene {
   private heroSprites: Phaser.GameObjects.Image[] = [];
   private pendingSkill: string | null = null;
   private pendingItem: string | null = null;
+  private pendingItemOwner = 0;
   private boss = false;
 
   constructor() {
@@ -36,7 +38,13 @@ export class BattleScene extends Phaser.Scene {
   create(): void {
     const encounter = Registry.consumeEncounter();
     const state = Registry.get();
-    this.heroes = state.party.map((h) => ({ ...h, states: [...h.states], skills: [...h.skills] }));
+    this.heroes = state.party.map((h) => ({
+      ...h,
+      states: [...h.states],
+      skills: [...h.skills],
+      inventory: h.inventory.map((i) => ({ ...i })),
+      equipment: { ...h.equipment },
+    }));
     this.boss = encounter?.boss ?? false;
     const ids = encounter?.enemies ?? ['slime'];
     this.enemies = ids.map((id, i) => {
@@ -54,6 +62,8 @@ export class BattleScene extends Phaser.Scene {
         states: [],
         color: def.color,
         undead: def.undead,
+        equipment: {},
+        inventory: [],
       };
     });
 
@@ -257,15 +267,16 @@ export class BattleScene extends Phaser.Scene {
   private showItemMenu(): void {
     this.phase = 'item';
     this.menu?.destroy();
-    const inv = Registry.get().inventory.filter((i) => ITEMS[i.id]?.kind === 'consumable' && i.qty > 0);
-    const items = inv.map((i) => ({ label: `${ITEMS[i.id].name} x${i.qty}` }));
+    const inv = listPartyConsumables(this.heroes);
+    const items = inv.map((i) => ({ label: i.label }));
     items.push({ label: 'Back' });
     this.menu = new TextMenu(this, 28, 455, items, (index) => {
       if (index >= inv.length) {
         this.showCommandMenu();
         return;
       }
-      this.pendingItem = inv[index].id;
+      this.pendingItem = inv[index].itemId;
+      this.pendingItemOwner = inv[index].ownerIndex;
       this.showAllyTargets();
     });
   }
@@ -318,17 +329,18 @@ export class BattleScene extends Phaser.Scene {
     if (this.pendingItem) {
       const item = ITEMS[this.pendingItem];
       const target = targets[0];
-      const stack = Registry.get().inventory.find((i) => i.id === this.pendingItem);
-      if (stack) {
-        stack.qty -= 1;
-        if (stack.qty <= 0) {
-          Registry.get().inventory = Registry.get().inventory.filter((i) => i.qty > 0);
-        }
+      const owner = this.heroes[this.pendingItemOwner];
+      if (!owner || !removeItem(owner.inventory, this.pendingItem, 1)) {
+        this.pushLog({ text: 'No item left in that bag!', color: '#f66' });
+        this.pendingItem = null;
+        this.showCommandMenu();
+        return;
       }
+      owner.inventory = pruneEmpty(owner.inventory);
       if (item.healHp) {
         target.currentHp = Math.min(target.stats.hp, target.currentHp + item.healHp);
         this.pushLog({
-          text: `${actor.name} uses ${item.name} on ${target.name} (+${item.healHp} HP).`,
+          text: `${actor.name} uses ${owner.name}'s ${item.name} on ${target.name} (+${item.healHp} HP).`,
           color: '#7f7',
         });
       }
@@ -361,9 +373,7 @@ export class BattleScene extends Phaser.Scene {
       for (const line of result.logs) this.pushLog(line);
       if (result.stolenGold) Registry.get().gold += result.stolenGold;
       if (result.stolenItem) {
-        const stack = Registry.get().inventory.find((i) => i.id === result.stolenItem);
-        if (stack) stack.qty += 1;
-        else Registry.get().inventory.push({ id: result.stolenItem, qty: 1 });
+        addItem(actor.inventory, result.stolenItem, 1);
       }
       this.pendingSkill = null;
     }
@@ -463,6 +473,8 @@ export class BattleScene extends Phaser.Scene {
       ...h,
       states: h.states.map((s) => ({ ...s })),
       skills: [...h.skills],
+      inventory: h.inventory.map((i) => ({ ...i })),
+      equipment: { ...h.equipment },
     }));
   }
 

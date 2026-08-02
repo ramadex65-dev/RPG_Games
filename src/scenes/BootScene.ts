@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { generateBuildingTextures } from '../assets/buildings';
 import { generateCharacterTextures } from '../assets/characters';
 
 export class BootScene extends Phaser.Scene {
@@ -14,6 +15,7 @@ export class BootScene extends Phaser.Scene {
     g.destroy();
 
     generateCharacterTextures(this);
+    generateBuildingTextures(this);
     this.scene.start('Title');
   }
 }

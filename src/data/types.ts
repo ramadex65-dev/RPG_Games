@@ -37,7 +37,6 @@ export interface SkillDef {
   power: number;
   element: Element;
   kind: 'physical' | 'magical' | 'heal' | 'buff' | 'utility';
-  /** Multiplier for damage/heal; buffs use state id */
   stateId?: string;
   stateTurns?: number;
   undeadBonus?: number;
@@ -78,6 +77,11 @@ export interface ItemDef {
   healMp?: number;
   atkBonus?: number;
   defBonus?: number;
+  matBonus?: number;
+  mdfBonus?: number;
+  agiBonus?: number;
+  /** Empty / omitted = any class. */
+  classes?: ClassId[];
 }
 
 export interface Combatant {
@@ -94,7 +98,8 @@ export interface Combatant {
   states: { id: string; turns: number }[];
   color: number;
   undead?: boolean;
-  equipment?: { weapon?: string; armor?: string };
+  equipment: { weapon?: string; armor?: string };
+  inventory: InventoryItem[];
 }
 
 export interface InventoryItem {
@@ -105,7 +110,8 @@ export interface InventoryItem {
 export interface GameState {
   party: Combatant[];
   gold: number;
-  inventory: InventoryItem[];
+  /** @deprecated kept for save migration only */
+  inventory?: InventoryItem[];
   flags: Record<string, boolean>;
   location: 'town' | 'dungeon';
   playerX: number;

@@ -1,6 +1,7 @@
 import { getClass } from '../data/classes';
 import { SKILLS } from '../data/skills';
 import type { ClassId, Combatant, Stats } from '../data/types';
+import { addItem, applyEquipBonuses } from './inventory';
 
 function scaleStats(base: Stats, growth: Stats, level: number): Stats {
   const levels = Math.max(0, level - 1);
@@ -20,7 +21,7 @@ export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
   const cls = getClass(classId);
   const stats = scaleStats(cls.base, cls.growth, level);
   const skills = cls.skills.filter((id) => SKILLS[id].learnLevel <= level);
-  return {
+  const hero: Combatant = {
     id: `hero_${classId}_${slot}`,
     name: cls.name,
     isPlayer: true,
@@ -34,7 +35,11 @@ export function createHero(classId: ClassId, level = 1, slot = 0): Combatant {
     states: [],
     color: cls.color,
     equipment: {},
+    inventory: [],
   };
+  addItem(hero.inventory, 'potion', slot === 0 ? 2 : 1);
+  if (cls.base.mp >= 16) addItem(hero.inventory, 'ether', 1);
+  return hero;
 }
 
 export function xpToNext(level: number): number {
@@ -48,12 +53,18 @@ export function grantXp(hero: Combatant, amount: number): string[] {
     hero.xp -= xpToNext(hero.level);
     hero.level += 1;
     const cls = getClass(hero.classId!);
-    const next = scaleStats(cls.base, cls.growth, hero.level);
-    const hpGain = next.hp - hero.stats.hp;
-    const mpGain = next.mp - hero.stats.mp;
-    hero.stats = next;
-    hero.currentHp = Math.min(next.hp, hero.currentHp + hpGain);
-    hero.currentMp = Math.min(next.mp, hero.currentMp + mpGain);
+    const prevBase = scaleStats(cls.base, cls.growth, hero.level - 1);
+    const nextBase = scaleStats(cls.base, cls.growth, hero.level);
+    const hpGain = nextBase.hp - prevBase.hp;
+    const mpGain = nextBase.mp - prevBase.mp;
+
+    hero.stats = { ...nextBase };
+    if (hero.equipment.weapon) applyEquipBonuses(hero, hero.equipment.weapon, 1);
+    if (hero.equipment.armor) applyEquipBonuses(hero, hero.equipment.armor, 1);
+
+    hero.currentHp = Math.min(hero.stats.hp, hero.currentHp + hpGain);
+    hero.currentMp = Math.min(hero.stats.mp, hero.currentMp + mpGain);
+
     const unlocked = cls.skills.filter(
       (id) => SKILLS[id].learnLevel === hero.level && !hero.skills.includes(id),
     );
