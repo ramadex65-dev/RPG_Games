@@ -134,6 +134,13 @@ export interface InventoryItem {
 
 export type LocationId = 'town' | 'dungeon' | 'ruins';
 
+/** One-shot buff from a dungeon event, applied in the next battle only. */
+export interface NextBattleBuff {
+  heroId: string;
+  stat: 'atk' | 'def';
+  amount: number;
+}
+
 export interface GameState {
   party: Combatant[];
   /** Recruited heroes not in the active four */
@@ -152,4 +159,6 @@ export interface GameState {
   playerY: number;
   dungeonCleared: boolean;
   ruinsCleared: boolean;
+  /** Tradition’s Sign — cleared when the next battle starts */
+  nextBattleBuff?: NextBattleBuff;
 }

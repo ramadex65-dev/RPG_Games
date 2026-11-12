@@ -96,6 +96,18 @@ export class BattleScene extends Phaser.Scene {
     // Fight with live party references so HP/MP changes persist on flee/return.
     for (const h of state.party) refreshHeroStats(h);
     this.heroes = state.party;
+
+    // Tradition’s Sign — one-shot buff for this battle only.
+    const buff = state.nextBattleBuff;
+    if (buff) {
+      const favored = this.heroes.find((h) => h.id === buff.heroId);
+      if (favored) {
+        if (buff.stat === 'atk') favored.stats.atk += buff.amount;
+        else favored.stats.def += buff.amount;
+      }
+      state.nextBattleBuff = undefined;
+    }
+
     const ids = encounter?.enemies ?? ['slime'];
     this.enemies = ids.map((id, i) => {
       const def = ENEMIES[id];
@@ -202,6 +214,15 @@ export class BattleScene extends Phaser.Scene {
       text: 'Formation: the two heaviest armors hold the Front; melee prefers them; spells strike at random.',
       color: '#8ab4d4',
     });
+    if (buff) {
+      const favored = this.heroes.find((h) => h.id === buff.heroId);
+      if (favored) {
+        this.pushLog({
+          text: `${favored.name} carries a tradition's favor (+${buff.amount} ${buff.stat.toUpperCase()})!`,
+          color: '#d48cff',
+        });
+      }
+    }
     this.refreshStatus();
     this.bindKeys();
     this.beginTurn();
@@ -243,6 +264,8 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     if (this.phase === 'lost') {
+      this.stripTempStatBuffs();
+      saveGame(Registry.get());
       this.scene.start('GameOver');
       return;
     }
@@ -874,11 +897,20 @@ export class BattleScene extends Phaser.Scene {
     this.pushLog({ text: 'Victory! Review XP, then press Enter.', color: '#9f9' });
   }
 
-  private finishFlee(): void {
-    // Strip short battle buffs so they don't linger on the map.
+  private stripTempStatBuffs(): void {
+    // Rebuild base+gear stats so event ATK/DEF buffs do not linger on the map.
     for (const h of this.heroes) {
       h.states = h.states.filter((s) => s.id !== 'shield' && s.id !== 'hide');
+      const hp = h.currentHp;
+      const mp = h.currentMp;
+      refreshHeroStats(h);
+      h.currentHp = Math.min(hp, h.stats.hp);
+      h.currentMp = Math.min(mp, h.stats.mp);
     }
+  }
+
+  private finishFlee(): void {
+    this.stripTempStatBuffs();
     saveGame(Registry.get());
     this.combatLog.clear();
     Audio.playMusic('dungeon');
@@ -887,6 +919,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private finishWin(): void {
+    this.stripTempStatBuffs();
     this.syncParty();
     saveGame(Registry.get());
     this.combatLog.clear();

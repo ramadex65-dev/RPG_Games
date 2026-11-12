@@ -1,6 +1,12 @@
 import Phaser from 'phaser';
 import { classTextureKey } from '../assets/characters';
 import { RUINS_ENCOUNTERS } from '../data/enemies';
+import {
+  rollDungeonEvent,
+  rollWanderBranch,
+  type EventChoiceOption,
+  type EventOutcome,
+} from '../data/events';
 import type { ClassId, GeneratedFloor } from '../data/types';
 import { Audio } from '../systems/audio';
 import { bindSceneKeys } from '../systems/keys';
@@ -10,6 +16,7 @@ import { chestAt, openChest } from '../world/explore';
 import { generateFloor } from '../world/generate';
 import { isBlocked, mapPixelSize, TILE, tileColor } from '../world/maps';
 import { InventoryScreen } from '../ui/InventoryScreen';
+import { TextMenu } from '../ui/menu';
 import { QuestLog } from '../ui/QuestLog';
 import { UI } from '../ui/theme';
 
@@ -28,6 +35,8 @@ export class RuinsScene extends Phaser.Scene {
   private dialog!: Phaser.GameObjects.Text;
   private questLog!: QuestLog;
   private inventoryUi: InventoryScreen | null = null;
+  private eventMenu: TextMenu | null = null;
+  private eventBusy = false;
   private chestMarks: Phaser.GameObjects.Rectangle[] = [];
   private moveCooldown = 0;
   private stepsSinceFight = 0;
@@ -40,6 +49,9 @@ export class RuinsScene extends Phaser.Scene {
 
   create(): void {
     this.blocked = false;
+    this.eventBusy = false;
+    this.eventMenu?.destroy();
+    this.eventMenu = null;
     this.inventoryUi = null;
     this.moveCooldown = 0;
     this.stepsSinceFight = 0;
@@ -151,15 +163,39 @@ export class RuinsScene extends Phaser.Scene {
       s: kb.addKey('S'),
     };
     bindSceneKeys(this, {
-      'keydown-ENTER': () => this.closeToast(),
-      'keydown-SPACE': () => this.closeToast(),
-      'keydown-E': () => this.interact(),
-      'keydown-I': () => this.toggleInventory(),
+      'keydown-ENTER': () => {
+        if (this.eventBusy) this.eventMenu?.confirm();
+        else this.closeToast();
+      },
+      'keydown-SPACE': () => {
+        if (this.eventBusy) this.eventMenu?.confirm();
+        else this.closeToast();
+      },
+      'keydown-UP': () => {
+        if (this.eventBusy) this.eventMenu?.move(-1);
+      },
+      'keydown-DOWN': () => {
+        if (this.eventBusy) this.eventMenu?.move(1);
+      },
+      'keydown-W': () => {
+        if (this.eventBusy) this.eventMenu?.move(-1);
+      },
+      'keydown-S': () => {
+        if (this.eventBusy) this.eventMenu?.move(1);
+      },
+      'keydown-E': () => {
+        if (!this.eventBusy) this.interact();
+      },
+      'keydown-I': () => {
+        if (!this.eventBusy) this.toggleInventory();
+      },
       'keydown-ESC': () => {
         if (this.inventoryUi) this.inventoryUi.close();
+        else if (this.eventBusy) this.eventMenu?.confirm();
         else this.closeToast();
       },
       'keydown-N': () => {
+        if (this.eventBusy) return;
         this.flashHint(Audio.toggleMute() ? 'Audio muted.' : 'Audio on.');
       },
     });
@@ -169,6 +205,7 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   private toggleInventory(): void {
+    if (this.eventBusy) return;
     if (this.inventoryUi) {
       this.inventoryUi.close();
       return;
@@ -183,7 +220,7 @@ export class RuinsScene extends Phaser.Scene {
   }
 
   update(_t: number, dt: number): void {
-    if (this.inventoryUi) return;
+    if (this.inventoryUi || this.eventBusy) return;
     if (this.blocked) this.closeToast();
     this.moveCooldown = Math.max(0, this.moveCooldown - dt);
     if (this.moveCooldown > 0) return;
@@ -247,16 +284,89 @@ export class RuinsScene extends Phaser.Scene {
       this.stepsSinceFight += 1;
       if (this.stepsSinceFight >= 4 && Math.random() < 0.24) {
         this.stepsSinceFight = 0;
-        const pack = RUINS_ENCOUNTERS[Math.floor(Math.random() * RUINS_ENCOUNTERS.length)];
-        Registry.setEncounter(pack, false);
-        saveGame(state);
-        Audio.playMusic('battle');
-        this.scene.start('Battle');
+        if (rollWanderBranch() === 'event') {
+          this.triggerWanderEvent();
+        } else {
+          const pack = RUINS_ENCOUNTERS[Math.floor(Math.random() * RUINS_ENCOUNTERS.length)];
+          Registry.setEncounter(pack, false);
+          saveGame(state);
+          Audio.playMusic('battle');
+          this.scene.start('Battle');
+        }
       }
     } catch {
       this.moveCooldown = 120;
       this.blocked = false;
     }
+  }
+
+  private triggerWanderEvent(): void {
+    const state = Registry.get();
+    const rolled = rollDungeonEvent(state, 'ruins');
+    if (rolled.kind === 'instant') {
+      this.applyEventOutcome(rolled.outcome);
+      return;
+    }
+    this.presentEventChoice(rolled.title, rolled.body, rolled.options);
+  }
+
+  private presentEventChoice(title: string, body: string, options: EventChoiceOption[]): void {
+    this.eventBusy = true;
+    this.blocked = true;
+    this.eventMenu?.destroy();
+    this.dialog
+      .setText(`${title}\n${body}\n\n↑↓ choose  ·  Enter confirm`)
+      .setVisible(true);
+
+    this.eventMenu = new TextMenu(
+      this,
+      40,
+      this.scale.height - 150,
+      options.map((o) => ({
+        label: o.label,
+        detail: o.detail,
+      })),
+      (index) => {
+        const opt = options[index];
+        if (!opt) return;
+        const outcome = opt.run();
+        this.eventMenu?.destroy();
+        this.eventMenu = null;
+        this.eventBusy = false;
+        this.blocked = false;
+        this.applyEventOutcome(outcome);
+      },
+      {
+        rows: true,
+        rowWidth: 420,
+        lineHeight: 40,
+        depth: 60,
+        style: { fontFamily: UI.font, fontSize: '13px', color: UI.color.body },
+      },
+    );
+  }
+
+  private applyEventOutcome(outcome: EventOutcome): void {
+    const state = Registry.get();
+    if (outcome.stepsBoost != null) {
+      this.stepsSinceFight = outcome.stepsBoost;
+    }
+    saveGame(state);
+    this.refreshHud();
+    Audio.sfx('confirm');
+
+    if (outcome.enemies?.length) {
+      this.flashHint(outcome.message, 1800);
+      this.time.delayedCall(700, () => {
+        Registry.setEncounter(outcome.enemies!, false);
+        saveGame(Registry.get());
+        Audio.playMusic('battle');
+        this.scene.start('Battle');
+      });
+      return;
+    }
+
+    this.flashHint(outcome.message, 2800);
   }
 
   private interact(): void {
